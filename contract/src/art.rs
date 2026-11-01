@@ -72,21 +72,26 @@ fn state_opacity(a: Appearance) -> &'static str {
     }
 }
 
-/// The body silhouette (6 variants), centred at (60, 66).
-fn body_shape(v: usize, body: &str, ink: &str) -> String {
-    let fill = format!("fill=\"{}\" stroke=\"{}\" stroke-width=\"2\"", body, ink);
-    match v % 6 {
-        0 => format!("<ellipse cx=\"60\" cy=\"66\" rx=\"31\" ry=\"30\" {}/>", fill), // round
-        1 => format!("<ellipse cx=\"60\" cy=\"66\" rx=\"25\" ry=\"34\" {}/>", fill), // tall
-        2 => format!("<ellipse cx=\"60\" cy=\"68\" rx=\"35\" ry=\"25\" {}/>", fill), // squat
-        3 => format!("<rect x=\"30\" y=\"38\" width=\"60\" height=\"56\" rx=\"26\" {}/>", fill), // bean
-        4 => format!("<rect x=\"32\" y=\"40\" width=\"56\" height=\"54\" rx=\"12\" {}/>", fill), // blocky
-        _ => format!(
-            // teardrop — a rounded body pinched to a point on top
-            "<path d=\"M60 34 C78 40 90 54 90 70 C90 88 76 96 60 96 C44 96 30 88 30 70 C30 54 42 40 60 34 Z\" {}/>",
-            fill
-        ),
-    }
+/// The body silhouette (6 chunky variants), centred near (60, 66). Returns the
+/// styled, outlined body element AND the same geometry bare, for use as a clip path
+/// (so the glossy shading overlay stays inside the body).
+fn body_shape(v: usize, body: &str, ink: &str) -> (String, String) {
+    // Each entry is an opening tag WITHOUT the closing `/>`, so we can finish it two
+    // ways: once styled (the body), once bare (the clip geometry).
+    let geom = match v % 6 {
+        0 => "<ellipse cx=\"60\" cy=\"66\" rx=\"34\" ry=\"32\"".to_string(), // round
+        1 => "<ellipse cx=\"60\" cy=\"67\" rx=\"28\" ry=\"36\"".to_string(), // tall
+        2 => "<ellipse cx=\"60\" cy=\"69\" rx=\"38\" ry=\"27\"".to_string(), // squat
+        3 => "<rect x=\"27\" y=\"35\" width=\"66\" height=\"62\" rx=\"31\"".to_string(), // bean
+        4 => "<rect x=\"29\" y=\"37\" width=\"62\" height=\"60\" rx=\"18\"".to_string(), // blocky
+        _ => "<path d=\"M60 32 C81 38 93 54 93 71 C93 90 79 99 60 99 C41 99 27 90 27 71 C27 54 39 38 60 32 Z\""
+            .to_string(), // teardrop
+    };
+    let el = format!(
+        "{geom} fill=\"{body}\" stroke=\"{ink}\" stroke-width=\"3\" stroke-linejoin=\"round\"/>"
+    );
+    let clip = format!("{geom}/>");
+    (el, clip)
 }
 
 /// Low-contrast markings on the body (4 variants). Drawn in ink at low opacity so
@@ -129,38 +134,44 @@ fn eyes_shape(v: usize, a: Appearance, ink: &str) -> String {
             ink
         );
     }
-    // Starving droops the eyes a little; otherwise the open variant shows.
+    // Starving droops the eyes a little; otherwise big glossy eyes.
     let droop = a == Appearance::Starving;
-    let (lx, rx, ey) = (50.0, 70.0, if droop { 62.0 } else { 60.0 });
-    match v % 8 {
-        0 => format!(
-            "<g fill=\"{ink}\"><circle cx=\"{lx}\" cy=\"{ey}\" r=\"3.5\"/><circle cx=\"{rx}\" cy=\"{ey}\" r=\"3.5\"/></g>"
-        ), // dots
-        1 => format!(
-            "<g fill=\"{ink}\"><ellipse cx=\"{lx}\" cy=\"{ey}\" rx=\"3\" ry=\"4.5\"/><ellipse cx=\"{rx}\" cy=\"{ey}\" rx=\"3\" ry=\"4.5\"/></g>"
-        ), // oval
-        2 => format!(
-            "<g fill=\"{ink}\"><circle cx=\"{lx}\" cy=\"{ey}\" r=\"5\"/><circle cx=\"{rx}\" cy=\"{ey}\" r=\"5\"/></g><g fill=\"#fff\"><circle cx=\"{lxh}\" cy=\"{eyh}\" r=\"1.6\"/><circle cx=\"{rxh}\" cy=\"{eyh}\" r=\"1.6\"/></g>",
-            lxh = lx + 1.6, rxh = rx + 1.6, eyh = ey - 1.6
-        ), // wide with glint
-        3 => format!(
-            "<g stroke=\"{ink}\" stroke-width=\"2\" fill=\"none\" stroke-linecap=\"round\"><path d=\"M{l0} {ey} Q{lx} {eyd} {l1} {ey}\"/><path d=\"M{r0} {ey} Q{rx} {eyd} {r1} {ey}\"/></g>",
-            l0 = lx - 4.0, l1 = lx + 4.0, r0 = rx - 4.0, r1 = rx + 4.0, eyd = ey + 4.0
-        ), // sleepy half-lids
-        4 => format!(
-            "<g fill=\"{ink}\" stroke=\"{ink}\"><circle cx=\"{lx}\" cy=\"{ey}\" r=\"4\" fill=\"none\" stroke-width=\"1.6\"/><circle cx=\"{lx}\" cy=\"{ey}\" r=\"1.8\"/><circle cx=\"{rx}\" cy=\"{ey}\" r=\"4\" fill=\"none\" stroke-width=\"1.6\"/><circle cx=\"{rx}\" cy=\"{ey}\" r=\"1.8\"/></g>"
-        ), // ringed
-        5 => format!(
-            "<g fill=\"{ink}\"><circle cx=\"{lx}\" cy=\"{ey}\" r=\"2.4\"/><circle cx=\"{rx}\" cy=\"{ey}\" r=\"2.4\"/></g>"
-        ), // small
-        6 => format!(
-            "<g fill=\"{ink}\"><ellipse cx=\"{lx}\" cy=\"{ey}\" rx=\"4.5\" ry=\"3\"/><ellipse cx=\"{rx}\" cy=\"{ey}\" rx=\"4.5\" ry=\"3\"/></g>"
-        ), // wide-set lozenge
-        _ => format!(
-            "<g fill=\"{ink}\"><circle cx=\"{lx}\" cy=\"{ey}\" r=\"3.5\"/><path d=\"M{r0} {ey} Q{rx} {eyd} {r1} {ey}\" stroke=\"{ink}\" stroke-width=\"2\" fill=\"none\" stroke-linecap=\"round\"/></g>",
-            r0 = rx - 4.0, r1 = rx + 4.0, eyd = ey + 4.0
-        ), // wink
+    let (lx, rx, ey) = (49.5_f64, 70.5_f64, if droop { 62.0 } else { 59.0 });
+
+    // sleepy half-lids
+    if v % 8 == 3 {
+        return format!(
+            "<g stroke=\"{ink}\" stroke-width=\"2.6\" fill=\"none\" stroke-linecap=\"round\"><path d=\"M{l0} {ey} Q{lx} {eyd} {l1} {ey}\"/><path d=\"M{r0} {ey} Q{rx} {eyd} {r1} {ey}\"/></g>",
+            l0 = lx - 5.0, l1 = lx + 5.0, r0 = rx - 5.0, r1 = rx + 5.0, eyd = ey + 5.0
+        );
     }
+
+    // glossy eye size varies a touch by trait
+    let (rxe, rye) = match v % 8 {
+        1 => (4.2, 5.8), // tall oval
+        5 => (3.8, 3.8), // small round
+        6 => (5.6, 4.2), // wide
+        _ => (5.0, 5.2), // big default
+    };
+    let cat = 1.8; // catchlight radius
+    let (clx, cry) = (0.4, 0.42); // catchlight offset within the eye
+    let left_eye = format!("<ellipse cx=\"{lx}\" cy=\"{ey}\" rx=\"{rxe}\" ry=\"{rye}\"/>");
+    let right_eye = format!("<ellipse cx=\"{rx}\" cy=\"{ey}\" rx=\"{rxe}\" ry=\"{rye}\"/>");
+
+    // wink: the right eye is a happy arc
+    if v % 8 == 7 {
+        return format!(
+            "<g fill=\"{ink}\">{left_eye}</g><circle cx=\"{lc}\" cy=\"{eyc}\" r=\"{cat}\" fill=\"#fff\"/>\
+<path d=\"M{r0} {ey} Q{rx} {eyd} {r1} {ey}\" stroke=\"{ink}\" stroke-width=\"2.6\" fill=\"none\" stroke-linecap=\"round\"/>",
+            lc = lx + rxe * clx, eyc = ey - rye * cry, r0 = rx - 5.0, r1 = rx + 5.0, eyd = ey + 4.5
+        );
+    }
+
+    format!(
+        "<g fill=\"{ink}\">{left_eye}{right_eye}</g>\
+<g fill=\"#fff\"><circle cx=\"{lc}\" cy=\"{eyc}\" r=\"{cat}\"/><circle cx=\"{rc}\" cy=\"{eyc}\" r=\"{cat}\"/></g>",
+        lc = lx + rxe * clx, rc = rx + rxe * clx, eyc = ey - rye * cry
+    )
 }
 
 /// The mouth is the clock face of hunger — it is derived entirely from state.
@@ -239,27 +250,57 @@ fn render_inner(face: &Face, frame: bool) -> String {
     let t = face.traits;
     let a = face.appearance;
     let pal = &PALETTES[(t[0] as usize) % PALETTES.len()];
-    let gid = (t[0] as usize) % PALETTES.len(); // unique gradient id per palette
+    // Element ids must be unique per *distinct creature* — inline SVGs share one id
+    // namespace in a page, and the body clip depends on the body dial, not just the
+    // palette. Key the ids on every visual dial so two creatures never cross-clip.
+    let uid = format!("{}-{}-{}-{}-{}", t[0], t[3], t[4], t[5], t[6]);
 
-    let body = body_shape(t[3] as usize, pal.body, pal.ink);
+    let (body_el, body_clip) = body_shape(t[3] as usize, pal.body, pal.ink);
     let pattern = pattern_overlay(t[6] as usize, pal.ink);
     let eyes = eyes_shape(t[4] as usize, a, pal.ink);
     let mouth = mouth_shape(a, pal.ink, pal.accent);
-    // A ghost drops its earthly adornments; everyone else wears theirs.
     let accessory = if a == Appearance::Ghost {
         String::new()
     } else {
         accessory_shape(t[5] as usize, pal.accent, pal.ink)
     };
-    // Floor shadow grounds a living creature (framed art only; the habitat provides
-    // its own platform glow). A ghost floats and casts none.
+
+    // Two little feet peek out under the body (not a ghost).
+    let feet = if a == Appearance::Ghost {
+        String::new()
+    } else {
+        format!(
+            "<g fill=\"{b}\" stroke=\"{i}\" stroke-width=\"3\" stroke-linejoin=\"round\"><ellipse cx=\"48\" cy=\"96\" rx=\"8\" ry=\"5\"/><ellipse cx=\"72\" cy=\"96\" rx=\"8\" ry=\"5\"/></g>",
+            b = pal.body,
+            i = pal.ink
+        )
+    };
+
+    // Soft rosy cheeks on a waking creature.
+    let cheeks = if a == Appearance::Ghost || a == Appearance::Asleep {
+        String::new()
+    } else {
+        format!(
+            "<g fill=\"{}\" opacity=\"0.5\"><ellipse cx=\"42\" cy=\"72\" rx=\"5\" ry=\"3.2\"/><ellipse cx=\"78\" cy=\"72\" rx=\"5\" ry=\"3.2\"/></g>",
+            pal.accent
+        )
+    };
+
+    // Glossy shading clipped to the body: a top sheen, a bottom shade, a belly light.
+    // Gives volume for any palette colour. Pattern markings ride inside the clip too.
+    let shade = format!(
+        "<g clip-path=\"url(#clip{uid})\"><rect width=\"120\" height=\"120\" fill=\"url(#sh{uid})\"/>\
+<ellipse cx=\"60\" cy=\"56\" rx=\"20\" ry=\"13\" fill=\"#fff\" opacity=\"0.14\"/>{pattern}</g>"
+    );
+
+    // Floor shadow grounds a living creature (framed art only; the habitat gives its
+    // own platform glow). A ghost floats and casts none.
     let shadow = if frame && a != Appearance::Ghost {
-        "<ellipse cx=\"60\" cy=\"104\" rx=\"24\" ry=\"4\" fill=\"#000\" opacity=\"0.18\"/>".to_string()
+        "<ellipse cx=\"60\" cy=\"106\" rx=\"26\" ry=\"4\" fill=\"#000\" opacity=\"0.18\"/>".to_string()
     } else {
         String::new()
     };
 
-    // Sleep z's drift up from the head.
     let zzz = if a == Appearance::Asleep {
         format!(
             "<g fill=\"none\" stroke=\"{}\" stroke-width=\"1.6\" stroke-linecap=\"round\" opacity=\"0.8\"><path d=\"M84 40 h5 l-5 6 h5\"/><path d=\"M92 30 h4 l-4 5 h4\"/><path d=\"M98 22 h3 l-3 4 h3\"/></g>",
@@ -269,10 +310,9 @@ fn render_inner(face: &Face, frame: bool) -> String {
         String::new()
     };
 
-    // A ghost gets a dashed, wavering outline over its faded body.
     let ghost_outline = if a == Appearance::Ghost {
         format!(
-            "<ellipse cx=\"60\" cy=\"66\" rx=\"33\" ry=\"32\" fill=\"none\" stroke=\"{}\" stroke-width=\"1.4\" stroke-dasharray=\"3 4\" opacity=\"0.7\"/>",
+            "<ellipse cx=\"60\" cy=\"66\" rx=\"35\" ry=\"33\" fill=\"none\" stroke=\"{}\" stroke-width=\"1.4\" stroke-dasharray=\"3 4\" opacity=\"0.7\"/>",
             pal.accent
         )
     } else {
@@ -284,15 +324,20 @@ fn render_inner(face: &Face, frame: bool) -> String {
 
     // The framed art carries its own gradient background + border window; the bare
     // variant is transparent so the creature floats in the web habitat.
-    let frame_markup = if frame {
+    let bg_grad = if frame {
         format!(
-            "<defs><linearGradient id=\"bg{gid}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\
-<stop offset=\"0\" stop-color=\"{bg0}\"/><stop offset=\"1\" stop-color=\"{bg1}\"/></linearGradient></defs>\
-<rect width=\"120\" height=\"120\" rx=\"16\" fill=\"url(#bg{gid})\"/>\
-<rect x=\"3\" y=\"3\" width=\"114\" height=\"114\" rx=\"14\" fill=\"none\" stroke=\"{accent}\" stroke-width=\"1\" opacity=\"0.25\"/>",
+            "<linearGradient id=\"bg{uid}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop offset=\"0\" stop-color=\"{bg0}\"/><stop offset=\"1\" stop-color=\"{bg1}\"/></linearGradient>",
             bg0 = pal.bg0,
             bg1 = pal.bg1,
-            accent = pal.accent,
+        )
+    } else {
+        String::new()
+    };
+    let frame_bg = if frame {
+        format!(
+            "<rect width=\"120\" height=\"120\" rx=\"16\" fill=\"url(#bg{uid})\"/>\
+<rect x=\"3\" y=\"3\" width=\"114\" height=\"114\" rx=\"14\" fill=\"none\" stroke=\"{accent}\" stroke-width=\"1\" opacity=\"0.25\"/>",
+            accent = pal.accent
         )
     } else {
         String::new()
@@ -300,9 +345,14 @@ fn render_inner(face: &Face, frame: bool) -> String {
 
     format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 120\" width=\"120\" height=\"120\">\
-{frame_markup}{shadow}\
+<defs><linearGradient id=\"sh{uid}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\
+<stop offset=\"0\" stop-color=\"#fff\" stop-opacity=\"0.32\"/>\
+<stop offset=\"0.45\" stop-color=\"#fff\" stop-opacity=\"0\"/>\
+<stop offset=\"1\" stop-color=\"#000\" stop-opacity=\"0.2\"/></linearGradient>\
+<clipPath id=\"clip{uid}\">{body_clip}</clipPath>{bg_grad}</defs>\
+{frame_bg}{shadow}\
 <g opacity=\"{opacity}\" transform=\"translate(0 {dy})\">\
-{body}{pattern}{ghost_outline}{eyes}{mouth}{accessory}\
+{feet}{body_el}{shade}{ghost_outline}{eyes}{cheeks}{mouth}{accessory}\
 </g>{zzz}</svg>"
     )
 }
@@ -373,8 +423,9 @@ mod tests {
         let f = Face { traits: [1; 7], appearance: Appearance::Full };
         let framed = render(&f);
         let bare = render_bare(&f);
-        assert!(framed.contains("linearGradient"), "framed art has its own background");
-        assert!(!bare.contains("linearGradient"), "bare art is transparent, no background");
+        // Framed art fills a background window; the bare variant has no background fill.
+        assert!(framed.contains("url(#bg"), "framed art paints its own background");
+        assert!(!bare.contains("url(#bg"), "bare art is transparent, no background fill");
         assert!(bare.trim_start().starts_with("<svg") && bare.trim_end().ends_with("</svg>"));
         assert!(bare.contains("<ellipse") || bare.contains("<path") || bare.contains("<circle"));
     }
