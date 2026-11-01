@@ -11,6 +11,9 @@ pub const MINT_PRICE: u128 = 2 * ONE_NEAR;
 pub const MINT_SEED: u128 = ONE_NEAR; // 1.0 NEAR -> the newborn's own food
 pub const MINT_STORAGE_RESERVE: u128 = ONE_NEAR / 4; // 0.25 NEAR locked for state
 
+/// What one reply ("thought") burns from a Mind's balance. 1 NEAR ~= 500 thoughts.
+pub const THOUGHT_COMPUTE_COST: u128 = ONE_NEAR / 500; // 0.002 NEAR
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct MintSplit {
     pub seed: u128,
