@@ -15,6 +15,7 @@ demo-window = []
 [dependencies]
 near-sdk = "=5.29.1"
 near-contract-standards = "=5.29.1"
+base64 = "0.22.1" # on-chain SVG -> data: URI for token media
 
 [dev-dependencies]
 near-sdk = { version = "=5.29.1", features = ["unit-testing"] }

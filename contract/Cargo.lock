@@ -970,6 +970,7 @@ dependencies = [
 name = "hungry-minds-contract"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "near-contract-standards",
  "near-sdk",
 ]

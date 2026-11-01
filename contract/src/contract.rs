@@ -9,6 +9,12 @@
 use crate::art::{self, Appearance};
 use crate::state::{hunger_state, HungerState};
 use crate::{economy, traits};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use near_contract_standards::non_fungible_token::metadata::{
+    NFTContractMetadata, TokenMetadata, NFT_METADATA_SPEC,
+};
+use near_contract_standards::non_fungible_token::Token;
+use near_sdk::json_types::U128;
 use near_sdk::store::IterableMap;
 use near_sdk::{env, near, AccountId, NearToken};
 
@@ -110,6 +116,43 @@ impl Contract {
         mind.spend_one_thought(now);
     }
 
+    /// Build the NEP-171 `Token` view for a Mind, with live on-chain SVG media.
+    fn as_token(&self, id: u64, mind: &Mind) -> Token {
+        let svg = art::render(&art::Face {
+            traits: mind.traits,
+            appearance: mind.appearance(),
+            name: &mind.name,
+        });
+        let media = format!("data:image/svg+xml;base64,{}", BASE64.encode(svg.as_bytes()));
+        let state = self.mind_state(id).unwrap_or_default();
+        let metadata = TokenMetadata {
+            title: Some(mind.name.clone()),
+            description: Some(format!(
+                "A living Mind that pays for its own thoughts. Right now it is {state}."
+            )),
+            media: Some(media),
+            media_hash: None,
+            copies: Some(1),
+            issued_at: Some(mind.born_ts.to_string()),
+            expires_at: None,
+            starts_at: None,
+            updated_at: None,
+            extra: Some(format!(
+                "{{\"state\":\"{state}\",\"thoughts\":{},\"balance_yocto\":\"{}\"}}",
+                mind.thought_count,
+                mind.balance.as_yoctonear()
+            )),
+            reference: None,
+            reference_hash: None,
+        };
+        Token {
+            token_id: id.to_string(),
+            owner_id: mind.owner.clone(),
+            metadata: Some(metadata),
+            approved_account_ids: None,
+        }
+    }
+
     /// Take and zero the owner's accrued 20% cut. NEVER touches the Mind's balance.
     fn take_owner_earnings(&mut self, id: u64) -> NearToken {
         let mind = self.minds.get_mut(&id).expect("no such Mind");
@@ -166,6 +209,68 @@ impl Contract {
                 name: &m.name,
             })
         })
+    }
+
+    // --- NEP-171 / NEP-177 / NEP-181: the wallet + indexer surface ---
+
+    /// Collection-level metadata (NEP-177).
+    pub fn nft_metadata(&self) -> NFTContractMetadata {
+        NFTContractMetadata {
+            spec: NFT_METADATA_SPEC.to_string(),
+            name: "Hungry Minds".to_string(),
+            symbol: "MIND".to_string(),
+            icon: None,
+            base_uri: None,
+            reference: None,
+            reference_hash: None,
+        }
+    }
+
+    /// One token's full view, with live on-chain SVG media (NEP-171).
+    pub fn nft_token(&self, token_id: String) -> Option<Token> {
+        let id: u64 = token_id.parse().ok()?;
+        let mind = self.minds.get(&id)?;
+        Some(self.as_token(id, mind))
+    }
+
+    /// Total minted (NEP-181).
+    pub fn nft_total_supply(&self) -> U128 {
+        U128(self.minds.len() as u128)
+    }
+
+    /// A page of all tokens (NEP-181).
+    pub fn nft_tokens(&self, from_index: Option<U128>, limit: Option<u64>) -> Vec<Token> {
+        let from = from_index.map(|U128(i)| i as usize).unwrap_or(0);
+        let lim = limit.unwrap_or(u64::MAX) as usize;
+        self.minds
+            .iter()
+            .skip(from)
+            .take(lim)
+            .map(|(id, m)| self.as_token(*id, m))
+            .collect()
+    }
+
+    /// How many tokens an account owns (NEP-181).
+    pub fn nft_supply_for_owner(&self, account_id: AccountId) -> U128 {
+        U128(self.minds.iter().filter(|(_, m)| m.owner == account_id).count() as u128)
+    }
+
+    /// A page of one account's tokens (NEP-181).
+    pub fn nft_tokens_for_owner(
+        &self,
+        account_id: AccountId,
+        from_index: Option<U128>,
+        limit: Option<u64>,
+    ) -> Vec<Token> {
+        let from = from_index.map(|U128(i)| i as usize).unwrap_or(0);
+        let lim = limit.unwrap_or(u64::MAX) as usize;
+        self.minds
+            .iter()
+            .filter(|(_, m)| m.owner == account_id)
+            .skip(from)
+            .take(lim)
+            .map(|(id, m)| self.as_token(*id, m))
+            .collect()
     }
 
     /// Hatch a new Mind. Payable: >= 2 NEAR. Rolls traits from block randomness,
@@ -572,6 +677,50 @@ mod tests {
         assert!(full.trim_start().starts_with("<svg"));
         assert_ne!(full, ghost, "a ghost must not look like a full Mind");
         assert_eq!(c.svg_for(99), None);
+    }
+
+    // --- NEP-171 metadata + enumeration ---
+    #[test]
+    fn nft_metadata_names_the_collection() {
+        let c = Contract::default();
+        let m = c.nft_metadata();
+        assert_eq!(m.name, "Hungry Minds");
+        assert_eq!(m.symbol, "MIND");
+        assert_eq!(m.spec, "nft-1.0.0");
+    }
+
+    #[test]
+    fn nft_token_carries_owner_title_and_live_media() {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string());
+        let tok = c.nft_token("0".to_string()).expect("token");
+        assert_eq!(tok.token_id, "0");
+        assert_eq!(tok.owner_id, "alice.near".parse::<AccountId>().unwrap());
+        let md = tok.metadata.expect("metadata");
+        assert_eq!(md.title.as_deref(), Some("Rue"));
+        assert!(md.media.unwrap().starts_with("data:image/svg+xml;base64,"));
+        assert!(c.nft_token("99".to_string()).is_none());
+        assert!(c.nft_token("not-a-number".to_string()).is_none());
+    }
+
+    #[test]
+    fn enumeration_counts_and_filters_by_owner() {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("A".to_string()); // 0 alice
+        c.hatch_mind("B".to_string()); // 1 alice
+        testing_env!(ctx_from("bob.near", NearToken::from_near(2)).build());
+        c.hatch_mind("C".to_string()); // 2 bob
+
+        assert_eq!(c.nft_total_supply(), U128(3));
+        assert_eq!(c.nft_supply_for_owner("alice.near".parse().unwrap()), U128(2));
+        assert_eq!(c.nft_tokens(None, None).len(), 3);
+        let alices = c.nft_tokens_for_owner("alice.near".parse().unwrap(), None, None);
+        assert_eq!(alices.len(), 2);
+        assert!(alices
+            .iter()
+            .all(|t| t.owner_id == "alice.near".parse::<AccountId>().unwrap()));
     }
 
     // --- reap -> ghost ---
