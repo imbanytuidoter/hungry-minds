@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { hero, gallery, type MindState } from "@/lib/minds";
+import { hero, gallery, vitalPercent, isAlive, type MindState } from "@/lib/minds";
 import Creature from "@/components/Creature";
 import MindCard from "@/components/MindCard";
 import Mood from "@/components/Mood";
 import Vital from "@/components/Vital";
-import { vitalPercent } from "@/lib/minds";
+
+const aliveCount = gallery.filter((m) => isAlive(m.state)).length;
 
 const ARC: MindState[] = [
   "full",
@@ -24,13 +25,21 @@ export default function Home() {
           Hungry Minds
         </span>
         <nav className="flex items-center" style={{ gap: 22, fontSize: 15, color: "var(--text-mid)" }}>
-          <a href="#life">How it lives</a>
-          <a href="#minds">The Minds</a>
+          <a href="#life" className="nav-link">How it lives</a>
+          <a href="#minds" className="nav-link">The Minds</a>
           <Link href="/hatch" className="btn btn-ghost" style={{ padding: "9px 16px" }}>
             Hatch a Mind
           </Link>
         </nav>
       </header>
+
+      {/* ── preview notice ──────────────────────────────────────────────── */}
+      <div className="wrap">
+        <div className="preview-note">
+          Preview — these are sample Minds rendered by the real contract. Wallet
+          actions and live replies go on once it&rsquo;s deployed to testnet.
+        </div>
+      </div>
 
       {/* ── hero ────────────────────────────────────────────────────────── */}
       <section className="wrap hero-grid" style={{ paddingTop: 48, paddingBottom: 72 }}>
@@ -168,7 +177,7 @@ export default function Home() {
         <div className="flex items-baseline justify-between" style={{ marginBottom: 24 }}>
           <h2 style={{ fontSize: "clamp(26px, 4vw, 38px)" }}>The Minds</h2>
           <span style={{ fontSize: 14, color: "var(--text-dim)" }}>
-            {gallery.length} alive right now
+            {aliveCount} of {gallery.length} awake
           </span>
         </div>
         <div className="minds-grid">

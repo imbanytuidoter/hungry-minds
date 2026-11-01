@@ -14,7 +14,10 @@ import Creature from "./Creature";
 import Mood from "./Mood";
 import Vital from "./Vital";
 
-type Line = { who: "you" | "mind" | "system"; text: string };
+type Line = { who: "you" | "mind" | "system"; text: string; id?: string };
+
+let lineSeq = 0;
+const nextId = () => `l${lineSeq++}`;
 
 const FEED_MEAL = 0.2; // NEAR; 95% reaches the Mind (economy.rs feed_split)
 
@@ -45,26 +48,28 @@ export default function MindDetail({ mind }: { mind: Mind }) {
     setDraft("");
     setBalance((b) => +Math.max(0, b - THOUGHT_COST).toFixed(4));
     setThoughts((t) => t + 1);
+    const pendingId = nextId();
     setLog((l) => [
       ...l,
-      { who: "you", text },
-      { who: "mind", text: "…" },
+      { who: "you", text, id: nextId() },
+      { who: "mind", text: "…", id: pendingId },
     ]);
     // Honest: the brain is not wired on this preview. The thought still COST the
     // Mind 0.002 NEAR — that is the real on-chain mechanic. We do not fake a reply.
+    // Resolve the placeholder by its stable id (not its position), so feeding or
+    // sending again before this fires can't strand a "…" bubble.
     setTimeout(() => {
-      setLog((l) => {
-        const next = [...l];
-        const last = next.findIndex((x, i) => x.who === "mind" && x.text === "…" && i === next.length - 1);
-        if (last >= 0) {
-          next[last] = {
-            who: "system",
-            text:
-              "That thought cost 0.002 NEAR from its balance — the real mechanic. Live replies (OutLayer TEE → NEAR AI, signed) connect once the brain ships.",
-          };
-        }
-        return next;
-      });
+      setLog((l) =>
+        l.map((line) =>
+          line.id === pendingId
+            ? {
+                who: "system",
+                text: "That thought cost 0.002 NEAR from its balance — the real mechanic. Live replies (OutLayer TEE → NEAR AI, signed) connect once the brain ships.",
+                id: pendingId,
+              }
+            : line
+        )
+      );
     }, 650);
   }
 
@@ -183,8 +188,8 @@ export default function MindDetail({ mind }: { mind: Mind }) {
               never {mind.name}&rsquo;s own food.
             </li>
             <li>
-              <strong>Sell it whole.</strong> Its balance, traits and memory go to
-              the buyer; your unclaimed cut is paid out to you first.
+              <strong>Sell it whole.</strong> Its balance, traits and life so far go
+              to the buyer; your unclaimed cut is paid out to you first.
             </li>
           </ul>
         </section>

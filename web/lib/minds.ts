@@ -25,10 +25,6 @@ export type Mind = {
   svgs: Record<MindState, string>;
 };
 
-/** The art for a Mind's current state. */
-export function currentSvg(m: Mind): string {
-  return m.svgs[m.state];
-}
 
 export type HeroData = {
   name: string;
@@ -48,8 +44,9 @@ export function isAlive(state: MindState): boolean {
   return state !== "asleep" && state !== "ghost";
 }
 
-/** Mirrors the contract's hunger thresholds (state.rs): a Mind that can no longer
- *  afford a thought (< 0.002 NEAR) is asleep. Preview-only; the chain is the truth. */
+/** The upper thresholds (0.02 / 0.1 / 0.5) mirror state.rs::hunger_state; below one
+ *  thought's cost (0.002 NEAR) the contract latches the Mind asleep in spend_one_thought,
+ *  which this treats as "asleep". Preview-only; the chain is the truth. */
 export function hungerFromBalance(near: number): MindState {
   if (near < 0.002) return "asleep";
   if (near < 0.02) return "starving";

@@ -14,7 +14,7 @@
 
   --text: #e8edf4;
   --text-mid: #a9b2bf;
-  --text-dim: #6c7684;
+  --text-dim: #828c9a; /* >= 4.5:1 on --bg (WCAG AA for small text) */
 
   /* Overridden per-view with the current Mind's colour. */
   --accent: #b59cff;
@@ -213,6 +213,22 @@ a {
 .btn-ghost:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.preview-note {
+  margin: 2px 0 6px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  color: var(--text-mid);
+  background: color-mix(in oklab, var(--accent) 7%, var(--surface));
+  border: 1px solid var(--line);
+}
+
+@media (max-width: 560px) {
+  .nav-link {
+    display: none;
+  }
 }
 
 .card {
