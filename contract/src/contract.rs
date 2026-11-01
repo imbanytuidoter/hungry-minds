@@ -16,7 +16,15 @@ use near_contract_standards::non_fungible_token::metadata::{
 use near_contract_standards::non_fungible_token::Token;
 use near_sdk::json_types::U128;
 use near_sdk::store::IterableMap;
-use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PromiseOrValue};
+use near_sdk::{
+    env, ext_contract, near, AccountId, Gas, GasWeight, NearToken, Promise, PromiseError,
+    PromiseOrValue, YieldId,
+};
+
+/// Gas reserved for the thinking callback when the reply (or timeout) comes back.
+const GAS_FOR_THINK_CALLBACK: Gas = Gas::from_tgas(10);
+/// Longest prompt a Mind will accept — bounds request storage and abuse.
+const MAX_PROMPT_LEN: usize = 500;
 
 /// The receiver interface for `nft_transfer_call` (NEP-171 core).
 #[allow(dead_code)] // the #[ext_contract] macro consumes this to generate ext_nft_receiver
@@ -61,6 +69,9 @@ pub struct Mind {
     pub ghost: bool,
     /// Owner's unclaimed 20% guest-chat cut (the only money the owner may take).
     pub owner_unclaimed: NearToken,
+    /// The Mind's most recent delivered thought (empty until it has thought once).
+    pub last_reply: String,
+    pub last_reply_ts: u64,
 }
 
 impl Mind {
@@ -104,11 +115,33 @@ impl Mind {
     }
 }
 
+/// A thought in flight: the contract parked a yielded promise and is waiting for the
+/// off-chain worker (OutLayer TEE -> NEAR AI) to resume it with a signed reply.
+#[near(serializers = [borsh])]
+pub struct Pending {
+    pub mind_id: u64,
+    pub prompt: String,
+    pub by_owner: bool,
+    pub yield_id: YieldId,
+}
+
+/// A pending thought as the off-chain worker sees it (JSON view).
+#[near(serializers = [json])]
+pub struct PendingView {
+    pub request_id: u64,
+    pub mind_id: u64,
+    pub prompt: String,
+    pub by_owner: bool,
+}
+
 #[near(contract_state)]
 pub struct Contract {
     next_id: u64,
     treasury: NearToken,
     minds: IterableMap<u64, Mind>,
+    /// Thoughts awaiting a reply, keyed by request id (the off-chain worker polls these).
+    next_request: u64,
+    pending: IterableMap<u64, Pending>,
 }
 
 impl Default for Contract {
@@ -117,6 +150,8 @@ impl Default for Contract {
             next_id: 0,
             treasury: NearToken::from_yoctonear(0),
             minds: IterableMap::new(b"m"),
+            next_request: 0,
+            pending: IterableMap::new(b"p"),
         }
     }
 }
@@ -183,6 +218,53 @@ impl Contract {
         let amount = mind.owner_unclaimed;
         mind.owner_unclaimed = NearToken::from_yoctonear(0);
         amount
+    }
+
+    /// Park a yielded promise for a thought and store the request so the off-chain worker
+    /// (OutLayer TEE -> NEAR AI) can pick it up and resume it with a reply. Returns the
+    /// yielded promise (the caller's transaction pauses here until a reply or the 200-block
+    /// timeout). The thought's cost has already been spent by the caller.
+    fn park_thought(&mut self, mind_id: u64, prompt: String, by_owner: bool) -> Promise {
+        let rid = self.next_request;
+        self.next_request += 1;
+        let args = near_sdk::serde_json::json!({ "mind_id": mind_id, "request_id": rid })
+            .to_string()
+            .into_bytes();
+        let (promise, yield_id) =
+            Promise::new_yield("on_thought", args, GAS_FOR_THINK_CALLBACK, GasWeight::default());
+        self.pending.insert(
+            rid,
+            Pending { mind_id, prompt, by_owner, yield_id },
+        );
+        env::log_str(&format!("thought_parked request={rid} mind={mind_id} by_owner={by_owner}"));
+        promise
+    }
+
+    /// Resolve a parked thought: store a delivered reply, or refund a timed-out one. Pure
+    /// enough to unit-test directly; the #[private] on_thought callback wraps it.
+    fn finalize_thought(&mut self, mind_id: u64, outcome: Result<String, ()>, now: u64) {
+        let mind = match self.minds.get_mut(&mind_id) {
+            Some(m) => m,
+            None => return,
+        };
+        match outcome {
+            Ok(reply) => {
+                mind.last_reply = reply;
+                mind.last_reply_ts = now;
+            }
+            Err(()) => {
+                // No compute was delivered — refund the thought the Mind paid for, and wake
+                // it if that very payment was what put it to sleep.
+                mind.balance = mind
+                    .balance
+                    .saturating_add(NearToken::from_yoctonear(economy::THOUGHT_COMPUTE_COST));
+                if mind.asleep_since != 0
+                    && mind.balance.as_yoctonear() >= economy::THOUGHT_COMPUTE_COST
+                {
+                    mind.asleep_since = 0;
+                }
+            }
+        }
     }
 
     /// Settle the departing owner's unclaimed cut and move the token to `receiver_id`.
@@ -372,6 +454,8 @@ impl Contract {
                 thought_count: 0,
                 ghost: false,
                 owner_unclaimed: NearToken::from_yoctonear(0),
+                last_reply: String::new(),
+                last_reply_ts: 0,
             },
         );
         self.next_id += 1;
@@ -405,21 +489,24 @@ impl Contract {
     }
 
     /// The owner talks to their own Mind: spends one thought from its balance.
-    pub fn think(&mut self, id: u64, prompt: String) {
+    pub fn think(&mut self, id: u64, prompt: String) -> Promise {
+        assert!(prompt.len() <= MAX_PROMPT_LEN, "prompt too long");
         let caller = env::predecessor_account_id();
         let now = env::block_timestamp();
-        let mind = self.minds.get_mut(&id).expect("no such Mind");
-        assert_eq!(caller, mind.owner, "only the owner can use think()");
-        assert!(!mind.ghost, "this Mind is a ghost — revive it first");
-        assert!(mind.spend_one_thought(now), "this Mind is asleep — feed it");
-        // The signed reply is produced off-chain by OutLayer TEE and resumed via a
-        // yield/resume callback; wiring that dispatch is DAY-1 (ABI unconfirmed on testnet).
-        env::log_str(&format!("thought_requested id={} by=owner len={}", id, prompt.len()));
+        {
+            let mind = self.minds.get_mut(&id).expect("no such Mind");
+            assert_eq!(caller, mind.owner, "only the owner can use think()");
+            assert!(!mind.ghost, "this Mind is a ghost — revive it first");
+            // The Mind pays for the thought up front; a timeout refunds it (finalize_thought).
+            assert!(mind.spend_one_thought(now), "this Mind is asleep — feed it");
+        }
+        self.park_thought(id, prompt, true)
     }
 
     /// A stranger pays to talk to a public Mind (70/20/10) and it thinks a reply.
     #[payable]
-    pub fn chat(&mut self, id: u64, prompt: String) {
+    pub fn chat(&mut self, id: u64, prompt: String) -> Promise {
+        assert!(prompt.len() <= MAX_PROMPT_LEN, "prompt too long");
         let caller = env::predecessor_account_id();
         let now = env::block_timestamp();
         let deposit = env::attached_deposit().as_yoctonear();
@@ -433,7 +520,63 @@ impl Contract {
             assert_eq!(mind.asleep_since, 0, "this Mind is asleep — only the owner can feed it");
         }
         self.credit_guest_payment(id, deposit, now);
-        env::log_str(&format!("thought_requested id={} by=guest len={}", id, prompt.len()));
+        self.park_thought(id, prompt, false)
+    }
+
+    /// The off-chain worker (OutLayer TEE -> NEAR AI) returns a reply here, resuming the
+    /// parked thought. The reply's TEE signature is verified OFF-CHAIN (EIP-191) for the
+    /// "verified ✓" badge; the contract never gates money on a signature.
+    pub fn respond(&mut self, request_id: u64, reply: String) {
+        let p = self.pending.get(&request_id).expect("no such pending thought");
+        // Resume the parked promise; on_thought then stores the reply and clears the request.
+        let _ = p
+            .yield_id
+            .resume(near_sdk::serde_json::to_vec(&reply).expect("serialize reply"));
+    }
+
+    /// Callback when a parked thought resolves — a reply arrived, or it timed out (200 blocks).
+    #[private]
+    pub fn on_thought(
+        &mut self,
+        mind_id: u64,
+        request_id: u64,
+        #[callback_result] reply: Result<String, PromiseError>,
+    ) {
+        self.pending.remove(&request_id);
+        let now = env::block_timestamp();
+        self.finalize_thought(mind_id, reply.map_err(|_| ()), now);
+    }
+
+    /// The Mind's most recent delivered thought (empty until it has thought once).
+    pub fn last_thought(&self, id: u64) -> Option<String> {
+        self.minds.get(&id).map(|m| m.last_reply.clone())
+    }
+
+    /// How many thoughts are currently in flight (awaiting a reply).
+    pub fn pending_count(&self) -> u64 {
+        self.pending.len() as u64
+    }
+
+    /// Thoughts awaiting a reply — the off-chain worker polls this, computes, and calls
+    /// `respond`. Paginated (≤ 50).
+    pub fn pending_requests(
+        &self,
+        from_index: Option<U128>,
+        limit: Option<u64>,
+    ) -> Vec<PendingView> {
+        let from = from_index.map(|U128(i)| i as usize).unwrap_or(0);
+        let lim = limit.map(|l| (l as usize).min(50)).unwrap_or(50);
+        self.pending
+            .iter()
+            .skip(from)
+            .take(lim)
+            .map(|(rid, p)| PendingView {
+                request_id: *rid,
+                mind_id: p.mind_id,
+                prompt: p.prompt.clone(),
+                by_owner: p.by_owner,
+            })
+            .collect()
     }
 
     /// Owner withdraws only their accrued 20% guest-chat cut — never the Mind's food.
@@ -595,6 +738,8 @@ mod tests {
             thought_count: 0,
             ghost,
             owner_unclaimed: NearToken::from_yoctonear(0),
+            last_reply: String::new(),
+            last_reply_ts: 0,
         }
     }
 
@@ -722,7 +867,7 @@ mod tests {
         c.hatch_mind("Rue".to_string()); // balance 1.0, treasury 0.75
 
         testing_env!(ctx_from("bob.near", NearToken::from_millinear(10)).build()); // guest pays 0.01
-        c.chat(0, "hi".to_string());
+        let _ = c.chat(0, "hi".to_string());
 
         let m = c.get_mind(0).unwrap();
         // 1.0 + 0.007 (to mind) - 0.002 (thought) = 1.005
@@ -739,7 +884,7 @@ mod tests {
         let mut c = Contract::default();
         c.hatch_mind("Rue".to_string());
         testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build());
-        c.chat(0, "hi".to_string());
+        let _ = c.chat(0, "hi".to_string());
     }
 
     #[test]
@@ -750,7 +895,7 @@ mod tests {
         let mut c = Contract::default();
         c.hatch_mind("Rue".to_string());
         testing_env!(ctx_from("bob.near", NearToken::from_yoctonear(0)).build());
-        c.chat(0, "hi".to_string());
+        let _ = c.chat(0, "hi".to_string());
     }
 
     // --- think (owner) ---
@@ -760,7 +905,7 @@ mod tests {
         let mut c = Contract::default();
         c.hatch_mind("Rue".to_string());
         testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(0)).build());
-        c.think(0, "hey".to_string());
+        let _ = c.think(0, "hey".to_string());
 
         let m = c.get_mind(0).unwrap();
         assert_eq!(m.balance, NearToken::from_millinear(998)); // 1.0 - 0.002
@@ -776,7 +921,53 @@ mod tests {
         let mut c = Contract::default();
         c.hatch_mind("Rue".to_string());
         testing_env!(ctx_from("bob.near", NearToken::from_yoctonear(0)).build());
-        c.think(0, "hi".to_string());
+        let _ = c.think(0, "hi".to_string());
+    }
+
+    // --- the brain: yield/resume thinking ---
+    #[test]
+    fn think_parks_a_request_and_spends_a_thought() {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string());
+        testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(0)).build());
+        let _ = c.think(0, "who are you?".to_string());
+
+        assert_eq!(c.get_mind(0).unwrap().thought_count, 1); // paid up front
+        assert_eq!(c.pending_count(), 1); // one thought in flight
+        assert_eq!(c.last_thought(0).as_deref(), Some("")); // no reply delivered yet
+        let reqs = c.pending_requests(None, None);
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].mind_id, 0);
+        assert_eq!(reqs[0].prompt, "who are you?");
+        assert!(reqs[0].by_owner);
+    }
+
+    #[test]
+    fn a_delivered_reply_is_stored_on_the_mind() {
+        let mut c = Contract::default();
+        c.minds.insert(0, make_mind(NearToken::from_near(1), false, 0));
+        c.finalize_thought(0, Ok("I think, therefore I bill.".to_string()), 123);
+        assert_eq!(c.last_thought(0).as_deref(), Some("I think, therefore I bill."));
+        assert_eq!(c.get_mind(0).unwrap().last_reply_ts, 123);
+    }
+
+    #[test]
+    fn a_timed_out_thought_is_refunded_and_wakes_the_mind() {
+        let mut c = Contract::default();
+        // a Mind that spent its last affordable thought: 0.001 NEAR, asleep.
+        c.minds.insert(
+            0,
+            make_mind(NearToken::from_yoctonear(crate::state::ONE_NEAR / 1000), false, 500),
+        );
+        c.finalize_thought(0, Err(()), 600);
+        let after = c.get_mind(0).unwrap();
+        // refunded the 0.002 it paid -> 0.003, which is affordable again -> awake
+        assert_eq!(
+            after.balance,
+            NearToken::from_yoctonear(crate::state::ONE_NEAR / 1000 + economy::THOUGHT_COMPUTE_COST)
+        );
+        assert_eq!(after.asleep_since, 0);
     }
 
     // --- the no-withdraw invariant ---
@@ -787,7 +978,7 @@ mod tests {
         c.hatch_mind("Rue".to_string());
         // a guest chat accrues owner_unclaimed and raises the Mind's own balance
         testing_env!(ctx_from("bob.near", NearToken::from_millinear(10)).build());
-        c.chat(0, "hi".to_string());
+        let _ = c.chat(0, "hi".to_string());
         let balance_before = c.get_mind(0).unwrap().balance;
 
         let taken = c.take_owner_earnings(0);
@@ -927,7 +1118,7 @@ mod tests {
         c.hatch_mind("Rue".to_string()); // alice owns token 0
         // a guest chat accrues alice's 20% cut and raises the Mind's own balance + memory
         testing_env!(ctx_from("bob.near", NearToken::from_millinear(10)).build());
-        c.chat(0, "hi".to_string());
+        let _ = c.chat(0, "hi".to_string());
         let balance = c.get_mind(0).unwrap().balance;
         let thoughts = c.get_mind(0).unwrap().thought_count;
         assert!(c.get_mind(0).unwrap().owner_unclaimed.as_yoctonear() > 0);
