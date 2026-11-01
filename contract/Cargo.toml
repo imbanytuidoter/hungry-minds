@@ -1,0 +1,9 @@
+[package]
+name = "hungry-minds-contract"
+version = "0.1.0"
+edition = "2021"
+description = "Hungry Minds — NEP-171 AI-pet that pays for its own thoughts. Core logic crate (near-sdk wired in later)."
+
+# near-sdk / near-contract-standards are added in a later TDD cycle, once the
+# pure logic below is green. Keeping deps empty here makes red/green instant.
+[dependencies]
