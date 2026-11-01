@@ -7,6 +7,11 @@ description = "Hungry Minds — NEP-171 AI-pet that pays for its own thoughts. C
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Shrinks the sleep->ghost window to minutes for the live testnet demo so judges
+# see the whole lifecycle arc. NEVER enabled for a mainnet build.
+demo-window = []
+
 [dependencies]
 near-sdk = "=5.29.1"
 near-contract-standards = "=5.29.1"

@@ -39,9 +39,43 @@ pub fn hunger_state(balance_yocto: u128) -> HungerState {
     }
 }
 
+/// Nanoseconds in one day.
+pub const NS_PER_DAY: u64 = 86_400 * 1_000_000_000;
+
+/// How long a Mind must stay asleep before anyone may `reap` it into a ghost.
+/// 30 days in production; a short window on the testnet demo build so judges
+/// see the whole arc in minutes (`cargo near build --features demo-window`).
+#[cfg(not(feature = "demo-window"))]
+pub const GHOST_AFTER_NS: u64 = 30 * NS_PER_DAY;
+#[cfg(feature = "demo-window")]
+pub const GHOST_AFTER_NS: u64 = 3 * 60 * 1_000_000_000; // 3 minutes
+
+/// Can this Mind be reaped into a ghost? Only if it has been continuously
+/// asleep (`asleep_since != 0`) for at least `GHOST_AFTER_NS`.
+pub fn is_reapable(asleep_since: u64, now: u64) -> bool {
+    asleep_since != 0 && now.saturating_sub(asleep_since) >= GHOST_AFTER_NS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn awake_mind_is_never_reapable() {
+        assert!(!is_reapable(0, 10 * GHOST_AFTER_NS));
+    }
+
+    #[test]
+    fn freshly_asleep_mind_is_not_reapable() {
+        let asleep = 1_000_000_000u64;
+        assert!(!is_reapable(asleep, asleep + GHOST_AFTER_NS - 1));
+    }
+
+    #[test]
+    fn long_asleep_mind_is_reapable() {
+        let asleep = 1_000_000_000u64;
+        assert!(is_reapable(asleep, asleep + GHOST_AFTER_NS));
+    }
 
     #[test]
     fn zero_balance_is_asleep() {

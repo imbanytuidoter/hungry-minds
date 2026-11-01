@@ -238,6 +238,26 @@ impl Contract {
             near_sdk::Promise::new(caller).transfer(amount);
         }
     }
+
+    /// Reap a Mind that has slept past `GHOST_AFTER_NS` into a ghost and refund
+    /// its locked storage reserve to the owner. Callable by anyone (a keeper
+    /// action); on the testnet demo build the window is minutes, not 30 days.
+    pub fn reap(&mut self, id: u64) {
+        let now = env::block_timestamp();
+        let owner = {
+            let mind = self.minds.get(&id).expect("no such Mind");
+            assert!(!mind.ghost, "already a ghost");
+            assert!(
+                crate::state::is_reapable(mind.asleep_since, now),
+                "not ready to reap — still within the sleep window"
+            );
+            mind.owner.clone()
+        };
+        self.minds.get_mut(&id).unwrap().ghost = true;
+        // Return the 0.25 NEAR that was locked for this Mind's storage at hatch.
+        near_sdk::Promise::new(owner)
+            .transfer(NearToken::from_yoctonear(economy::MINT_STORAGE_RESERVE));
+    }
 }
 
 #[cfg(test)]
@@ -447,5 +467,48 @@ mod tests {
         assert_eq!(taken, NearToken::from_millinear(2)); // only the 20% cut
         assert_eq!(c.get_mind(0).unwrap().owner_unclaimed, NearToken::from_yoctonear(0));
         assert_eq!(c.get_mind(0).unwrap().balance, balance_before); // Mind's food untouched
+    }
+
+    // --- reap -> ghost ---
+    fn ctx_at(who: &str, ts: u64) -> VMContextBuilder {
+        let mut b = VMContextBuilder::new();
+        b.predecessor_account_id(who.parse().unwrap())
+            .attached_deposit(NearToken::from_yoctonear(0))
+            .block_timestamp(ts)
+            .random_seed(seed_all(0));
+        b
+    }
+
+    #[test]
+    fn long_asleep_mind_can_be_reaped_into_a_ghost() {
+        let asleep = 1_000_000_000u64;
+        let mut c = Contract::default();
+        c.minds
+            .insert(0, make_mind(NearToken::from_yoctonear(0), false, asleep));
+        testing_env!(ctx_at("keeper.near", asleep + crate::state::GHOST_AFTER_NS).build());
+        c.reap(0);
+        assert!(c.get_mind(0).unwrap().ghost);
+        assert_eq!(c.mind_state(0).as_deref(), Some("ghost"));
+    }
+
+    #[test]
+    #[should_panic(expected = "not ready to reap")]
+    fn a_recently_asleep_mind_cannot_be_reaped() {
+        let asleep = 1_000_000_000u64;
+        let mut c = Contract::default();
+        c.minds
+            .insert(0, make_mind(NearToken::from_yoctonear(0), false, asleep));
+        testing_env!(ctx_at("keeper.near", asleep + crate::state::GHOST_AFTER_NS - 1).build());
+        c.reap(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "already a ghost")]
+    fn a_ghost_cannot_be_reaped_again() {
+        let mut c = Contract::default();
+        c.minds
+            .insert(0, make_mind(NearToken::from_yoctonear(0), true, 500));
+        testing_env!(ctx_at("keeper.near", u64::MAX).build());
+        c.reap(0);
     }
 }
