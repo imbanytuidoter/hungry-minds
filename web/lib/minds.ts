@@ -23,6 +23,8 @@ export type Mind = {
   bg: string;
   /** Every state's art for this exact creature (real renderer output). */
   svgs: Record<MindState, string>;
+  /** Background-less variant, for the habitat where it floats in a light beam. */
+  svgsBare: Record<MindState, string>;
 };
 
 
@@ -31,6 +33,7 @@ export type HeroData = {
   accent: string;
   bg: string;
   states: Record<MindState, string>;
+  statesBare: Record<MindState, string>;
 };
 
 export const hero = samples.hero as HeroData;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import type { Mind, MindState } from "@/lib/minds";
 import {
@@ -28,17 +28,27 @@ export default function MindDetail({ mind }: { mind: Mind }) {
   const [ghost] = useState(mind.state === "ghost");
   const [draft, setDraft] = useState("");
   const [log, setLog] = useState<Line[]>([]);
+  const [hop, setHop] = useState(false);
+  const [bursts, setBursts] = useState<number[]>([]);
+  const burstSeq = useRef(0);
 
   const state: MindState = ghost ? "ghost" : hungerFromBalance(balance);
   const awake = isAlive(state);
-  const svg = mind.svgs[state];
+  const svg = mind.svgsBare[state]; // frameless: it floats in the chamber, not a card
+  const low = vitalPercent(state) <= 24 && awake;
 
   function feed() {
     if (ghost) return;
     setBalance((b) => +(b + FEED_MEAL * 0.95).toFixed(4));
+    // juice: the creature hops and food rains down
+    setHop(true);
+    setTimeout(() => setHop(false), 740);
+    const id = burstSeq.current++;
+    setBursts((b) => [...b, id]);
+    setTimeout(() => setBursts((b) => b.filter((x) => x !== id)), 1000);
     setLog((l) => [
       ...l,
-      { who: "system", text: `You fed ${mind.name} a 0.2 NEAR meal.` },
+      { who: "system", text: `You fed ${mind.name} a 0.2 NEAR meal.`, id: nextId() },
     ]);
   }
 
@@ -104,8 +114,17 @@ export default function MindDetail({ mind }: { mind: Mind }) {
       <div className="detail-grid">
         {/* creature + vitals */}
         <section>
-          <div className="terrarium">
-            <Creature svg={svg} state={state} />
+          <div className="detail-chamber">
+            <div className="stage-grid" aria-hidden />
+            <div className="chamber-glow" aria-hidden />
+            <div className="chamber-beam" aria-hidden />
+            <div className="chamber-creature">
+              <Creature svg={svg} state={state} hop={hop} />
+            </div>
+            <div className="chamber-platform" aria-hidden />
+            {bursts.map((id) => (
+              <FeedFx key={id} />
+            ))}
           </div>
           <div className="flex items-center justify-between" style={{ marginTop: 16 }}>
             <div>
@@ -120,7 +139,7 @@ export default function MindDetail({ mind }: { mind: Mind }) {
             {moodBlurb(state)}
           </p>
           <div style={{ marginTop: 16 }}>
-            <Vital percent={vitalPercent(state)} balanceNear={balance.toFixed(3)} />
+            <Vital percent={vitalPercent(state)} balanceNear={balance.toFixed(3)} low={low} />
           </div>
 
           <div className="flex" style={{ gap: 10, marginTop: 20, flexWrap: "wrap" }}>
@@ -195,5 +214,30 @@ export default function MindDetail({ mind }: { mind: Mind }) {
         </section>
       </div>
     </main>
+  );
+}
+
+// A burst of food raining into the terrarium, with a floating "+0.19".
+function FeedFx() {
+  const bits = Array.from({ length: 9 }, () => ({
+    left: 8 + Math.random() * 84,
+    delay: Math.random() * 0.25,
+    dur: 0.8 + Math.random() * 0.32,
+  }));
+  return (
+    <div className="feed-fx" aria-hidden>
+      {bits.map((b, i) => (
+        <span
+          key={i}
+          className="food-bit"
+          style={{
+            left: `${b.left}%`,
+            animationDelay: `${b.delay}s`,
+            animationDuration: `${b.dur}s`,
+          }}
+        />
+      ))}
+      <span className="float-gain">+0.19</span>
+    </div>
   );
 }

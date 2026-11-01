@@ -417,3 +417,377 @@ a {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* ── Life & juice ──────────────────────────────────────────────────────────
+   The on-chain SVG is a still canonical image; the web brings it to life. Two
+   nested layers so a one-shot hop (outer) composes with the continuous idle
+   (inner) without fighting over `transform`. */
+.creature {
+  position: relative;
+}
+.c-hop-layer,
+.c-idle-layer {
+  will-change: transform;
+}
+
+.c-alive {
+  animation: idle-alive 4.2s ease-in-out infinite;
+  transform-origin: 50% 86%;
+}
+.c-weak {
+  animation: idle-weak 3.4s ease-in-out infinite;
+  transform-origin: 50% 90%;
+}
+.c-sleep {
+  animation: idle-sleep 5s ease-in-out infinite;
+  transform-origin: 50% 86%;
+}
+.c-ghost {
+  animation: idle-ghost 6s ease-in-out infinite;
+}
+
+@keyframes idle-alive {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-2.4%) rotate(-1deg); }
+  50% { transform: translateY(0) rotate(0deg); }
+  75% { transform: translateY(-1.4%) rotate(1deg); }
+}
+@keyframes idle-weak {
+  0%, 100% { transform: translate(0, 0); }
+  8% { transform: translate(-0.7%, 0); }
+  16% { transform: translate(0.7%, 0); }
+  24% { transform: translate(0, 0); }
+  60% { transform: translate(0, -0.9%); }
+}
+@keyframes idle-sleep {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(1.3%) scale(0.996); }
+}
+@keyframes idle-ghost {
+  0%, 100% { transform: translateY(0); opacity: 1; }
+  50% { transform: translateY(-5%); opacity: 0.78; }
+}
+
+/* one-shot hop, triggered on feed */
+.c-hop-layer.hopping {
+  animation: hop 0.72s cubic-bezier(0.3, 1.4, 0.5, 1);
+  transform-origin: 50% 90%;
+}
+@keyframes hop {
+  0% { transform: translateY(0) scale(1, 1); }
+  18% { transform: translateY(0) scale(1.12, 0.86); }
+  45% { transform: translateY(-26%) scale(0.92, 1.1); }
+  70% { transform: translateY(0) scale(1.08, 0.92); }
+  85% { transform: translateY(0) scale(0.98, 1.02); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+
+/* gallery cards: the creature hops when you hover its card */
+.card:hover .c-hop-layer {
+  animation: hop 0.6s cubic-bezier(0.3, 1.4, 0.5, 1);
+  transform-origin: 50% 90%;
+}
+
+/* feeding: food rains down inside the terrarium */
+.feed-fx {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+  z-index: 3;
+}
+.food-bit {
+  position: absolute;
+  top: -8%;
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--accent);
+  opacity: 0;
+  animation: food-fall 0.95s ease-in forwards;
+}
+@keyframes food-fall {
+  0% { transform: translateY(0) rotate(0deg); opacity: 0; }
+  12% { opacity: 1; }
+  100% { transform: translateY(640%) rotate(240deg); opacity: 0; }
+}
+
+/* floating +amount on feed */
+.float-gain {
+  position: absolute;
+  left: 50%;
+  top: 38%;
+  transform: translateX(-50%);
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 22px;
+  pointer-events: none;
+  z-index: 4;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  animation: float-up 1s ease-out forwards;
+}
+@keyframes float-up {
+  0% { transform: translate(-50%, 0); opacity: 0; }
+  22% { opacity: 1; }
+  100% { transform: translate(-50%, -64px); opacity: 0; }
+}
+
+/* ambient bloom in the Mind's own colour */
+.terrarium::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    58% 48% at 50% 44%,
+    color-mix(in oklab, var(--accent) 14%, transparent),
+    transparent 72%
+  );
+  pointer-events: none;
+  z-index: 2;
+  animation: glow-pulse 5s ease-in-out infinite;
+}
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.8; }
+}
+
+/* vital bar pulses when the Mind is running low */
+.vital.low > span {
+  animation: vital-pulse 1.1s ease-in-out infinite;
+}
+@keyframes vital-pulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.6); }
+}
+
+/* button juice */
+.btn {
+  transition: transform 0.12s cubic-bezier(0.3, 1.4, 0.5, 1), filter 0.15s ease,
+    box-shadow 0.2s ease, border-color 0.15s ease;
+}
+.btn-primary:hover {
+  box-shadow: 0 10px 28px -10px var(--accent);
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+.btn-lg {
+  padding: 14px 24px;
+  font-size: 16px;
+  border-radius: 14px;
+}
+
+/* ── The Vivarium (hero habitat) ────────────────────────────────────────────
+   A Mind materialised in a containment beam of its own colour: receding grid
+   floor, volumetric light, rising motes, a big breathing creature. A place,
+   not a card. */
+.stage {
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(130% 90% at 50% -10%, #12141c, var(--bg) 55%);
+}
+.stage-grid {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 200%;
+  height: 55%;
+  transform: translateX(-50%) perspective(420px) rotateX(64deg);
+  transform-origin: bottom center;
+  background-image: linear-gradient(
+      to right,
+      color-mix(in oklab, var(--accent) 22%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--accent) 22%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 54px 54px;
+  -webkit-mask-image: linear-gradient(to top, #000 2%, transparent 72%);
+  mask-image: linear-gradient(to top, #000 2%, transparent 72%);
+  opacity: 0.5;
+  z-index: 0;
+}
+.stage-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(120% 100% at 50% 45%, transparent 52%, rgba(0, 0, 0, 0.6));
+  z-index: 1;
+}
+.stage-inner {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 0.95fr 1.05fr;
+  gap: 48px;
+  align-items: center;
+  min-height: 86vh;
+  padding-block: 70px 60px;
+}
+
+.chamber {
+  position: relative;
+  height: clamp(420px, 52vh, 560px);
+  display: grid;
+  place-items: center;
+}
+.chamber-glow {
+  position: absolute;
+  width: 80%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--accent) 45%, transparent),
+    transparent 62%
+  );
+  filter: blur(36px);
+  animation: glow-pulse 5s ease-in-out infinite;
+  transform: translate(calc(var(--px) * 16px), calc(var(--py) * 12px));
+  z-index: 0;
+}
+.chamber-beam {
+  position: absolute;
+  inset: -6% 8% 8% 8%;
+  background: radial-gradient(
+    58% 72% at 50% 16%,
+    color-mix(in oklab, var(--accent) 26%, transparent),
+    transparent 68%
+  );
+  filter: blur(18px);
+  opacity: 0.6;
+  z-index: 0;
+}
+.chamber-motes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+}
+.chamber-creature {
+  position: relative;
+  z-index: 3;
+  width: min(320px, 76%);
+  filter: drop-shadow(0 12px 26px color-mix(in oklab, var(--accent) 40%, transparent));
+  transform: translate(calc(var(--px) * -10px), calc(var(--py) * -8px));
+}
+.chamber-creature svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.chamber-platform {
+  position: absolute;
+  bottom: 11%;
+  width: 56%;
+  height: 42px;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in oklab, var(--accent) 55%, transparent),
+    transparent 70%
+  );
+  filter: blur(7px);
+  z-index: 1;
+}
+
+/* the Mind detail page gets its own compact habitat */
+.detail-chamber {
+  position: relative;
+  height: clamp(320px, 42vh, 420px);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 20px;
+  background: radial-gradient(120% 90% at 50% 0%, #12141c, var(--surface) 70%);
+  border: 1px solid var(--line);
+}
+.detail-chamber .chamber-creature {
+  width: min(240px, 62%);
+}
+
+.hud {
+  position: absolute;
+  z-index: 4;
+}
+.hud-mood {
+  top: 4%;
+  left: 0;
+}
+.hud-vital {
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 74%;
+  background: color-mix(in oklab, #000 38%, transparent);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 14px;
+}
+.hud-vital-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  margin-bottom: 7px;
+  font-weight: 600;
+}
+.hud-dim {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--accent);
+  margin-bottom: 18px;
+}
+.eyebrow::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+}
+.pitch-lead {
+  font-size: 19px;
+  color: var(--text-mid);
+  max-width: 46ch;
+  margin-top: 22px;
+}
+.pitch-cta {
+  display: flex;
+  gap: 12px;
+  margin-top: 30px;
+  flex-wrap: wrap;
+}
+.pitch-fine {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-top: 18px;
+}
+
+@media (max-width: 860px) {
+  .stage-inner {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    min-height: auto;
+    padding-block: 40px 50px;
+  }
+  .chamber {
+    height: clamp(340px, 60vw, 440px);
+    order: -1;
+  }
+}

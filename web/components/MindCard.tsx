@@ -26,7 +26,7 @@ export default function MindCard({ mind }: { mind: Mind }) {
           border: "1px solid var(--line)",
         }}
       >
-        <Creature svg={mind.svgs[mind.state]} state={mind.state} />
+        <Creature svg={mind.svgs[mind.state]} state={mind.state} lively={false} />
       </div>
       <div className="flex items-center justify-between mt-3">
         <span style={{ fontWeight: 600, fontSize: 16 }}>{mind.name}</span>

@@ -2,9 +2,11 @@
 export default function Vital({
   percent,
   balanceNear,
+  low = false,
 }: {
   percent: number;
   balanceNear: string;
+  low?: boolean;
 }) {
   return (
     <div>
@@ -14,7 +16,7 @@ export default function Vital({
           {balanceNear} NEAR
         </span>
       </div>
-      <div className="vital">
+      <div className={`vital ${low ? "low" : ""}`}>
         <span style={{ width: `${percent}%` }} />
       </div>
     </div>

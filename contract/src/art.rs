@@ -224,7 +224,18 @@ fn accessory_shape(v: usize, accent: &str, ink: &str) -> String {
 
 /// Assemble the full SVG document for a Mind. Self-contained (its own background),
 /// deterministic, and small enough to return inline (well under the 4 MiB view cap).
+/// This is the canonical on-chain art (framed window), used by `svg_for`/`nft_token`.
 pub fn render(face: &Face) -> String {
+    render_inner(face, true)
+}
+
+/// Background-less variant (transparent, no frame or floor shadow): just the creature,
+/// for the web habitat where it floats in a light beam. Not used on-chain.
+pub fn render_bare(face: &Face) -> String {
+    render_inner(face, false)
+}
+
+fn render_inner(face: &Face, frame: bool) -> String {
     let t = face.traits;
     let a = face.appearance;
     let pal = &PALETTES[(t[0] as usize) % PALETTES.len()];
@@ -240,11 +251,12 @@ pub fn render(face: &Face) -> String {
     } else {
         accessory_shape(t[5] as usize, pal.accent, pal.ink)
     };
-    // Floor shadow grounds a living creature; a ghost floats and casts none.
-    let shadow = if a == Appearance::Ghost {
-        String::new()
-    } else {
+    // Floor shadow grounds a living creature (framed art only; the habitat provides
+    // its own platform glow). A ghost floats and casts none.
+    let shadow = if frame && a != Appearance::Ghost {
         "<ellipse cx=\"60\" cy=\"104\" rx=\"24\" ry=\"4\" fill=\"#000\" opacity=\"0.18\"/>".to_string()
+    } else {
+        String::new()
     };
 
     // Sleep z's drift up from the head.
@@ -270,19 +282,28 @@ pub fn render(face: &Face) -> String {
     let dy = if a == Appearance::Ghost { -4 } else { 0 };
     let opacity = state_opacity(a);
 
-    format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 120\" width=\"120\" height=\"120\">\
-<defs><linearGradient id=\"bg{gid}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\
+    // The framed art carries its own gradient background + border window; the bare
+    // variant is transparent so the creature floats in the web habitat.
+    let frame_markup = if frame {
+        format!(
+            "<defs><linearGradient id=\"bg{gid}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\
 <stop offset=\"0\" stop-color=\"{bg0}\"/><stop offset=\"1\" stop-color=\"{bg1}\"/></linearGradient></defs>\
 <rect width=\"120\" height=\"120\" rx=\"16\" fill=\"url(#bg{gid})\"/>\
-<rect x=\"3\" y=\"3\" width=\"114\" height=\"114\" rx=\"14\" fill=\"none\" stroke=\"{accent}\" stroke-width=\"1\" opacity=\"0.25\"/>\
-{shadow}\
+<rect x=\"3\" y=\"3\" width=\"114\" height=\"114\" rx=\"14\" fill=\"none\" stroke=\"{accent}\" stroke-width=\"1\" opacity=\"0.25\"/>",
+            bg0 = pal.bg0,
+            bg1 = pal.bg1,
+            accent = pal.accent,
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 120\" width=\"120\" height=\"120\">\
+{frame_markup}{shadow}\
 <g opacity=\"{opacity}\" transform=\"translate(0 {dy})\">\
 {body}{pattern}{ghost_outline}{eyes}{mouth}{accessory}\
-</g>{zzz}</svg>",
-        bg0 = pal.bg0,
-        bg1 = pal.bg1,
-        accent = pal.accent,
+</g>{zzz}</svg>"
     )
 }
 
@@ -345,6 +366,17 @@ mod tests {
     fn stays_small_enough_to_return_inline() {
         let s = face([7, 7, 7, 7, 7, 7, 7], Appearance::Full);
         assert!(s.len() < 8192, "on-chain SVG should stay compact, was {}", s.len());
+    }
+
+    #[test]
+    fn bare_render_drops_the_background_frame() {
+        let f = Face { traits: [1; 7], appearance: Appearance::Full };
+        let framed = render(&f);
+        let bare = render_bare(&f);
+        assert!(framed.contains("linearGradient"), "framed art has its own background");
+        assert!(!bare.contains("linearGradient"), "bare art is transparent, no background");
+        assert!(bare.trim_start().starts_with("<svg") && bare.trim_end().ends_with("</svg>"));
+        assert!(bare.contains("<ellipse") || bare.contains("<path") || bare.contains("<circle"));
     }
 
     /// Not a test — a design harness. Writes a visual contact sheet so the art can
@@ -416,6 +448,9 @@ figcaption{{margin-top:8px;font-size:11px;color:#79828f}}</style>\
         fn svg(traits: [u8; 7], a: Appearance) -> String {
             esc(&render(&Face { traits, appearance: a }))
         }
+        fn svg_bare(traits: [u8; 7], a: Appearance) -> String {
+            esc(&render_bare(&Face { traits, appearance: a }))
+        }
 
         // Hero: one creature across its whole life, keyed by state.
         let hero = [4u8, 3, 1, 0, 2, 4, 1]; // dreamer, teal, halo
@@ -425,11 +460,17 @@ figcaption{{margin-top:8px;font-size:11px;color:#79828f}}</style>\
         ];
         let pal_of = |tr: [u8; 7]| &PALETTES[(tr[0] as usize) % PALETTES.len()];
         let mut hero_json = String::from("{");
+        let mut hero_bare_json = String::from("{");
         for (i, (label, st)) in states.iter().enumerate() {
-            if i > 0 { hero_json.push(','); }
+            if i > 0 {
+                hero_json.push(',');
+                hero_bare_json.push(',');
+            }
             hero_json.push_str(&format!("\"{label}\":\"{}\"", svg(hero, *st)));
+            hero_bare_json.push_str(&format!("\"{label}\":\"{}\"", svg_bare(hero, *st)));
         }
         hero_json.push('}');
+        hero_bare_json.push('}');
         let hero_pal = pal_of(hero);
 
         // Gallery: varied creatures across the arc, with believable demo vitals.
@@ -456,20 +497,26 @@ figcaption{{margin-top:8px;font-size:11px;color:#79828f}}</style>\
             // Every state's art for this exact creature, so the web app can show it
             // change as it is fed or drained — all from the real renderer.
             let mut svgs = String::from("{");
+            let mut svgs_bare = String::from("{");
             for (j, (slabel, sst)) in states.iter().enumerate() {
-                if j > 0 { svgs.push(','); }
+                if j > 0 {
+                    svgs.push(',');
+                    svgs_bare.push(',');
+                }
                 svgs.push_str(&format!("\"{slabel}\":\"{}\"", svg(*tr, *sst)));
+                svgs_bare.push_str(&format!("\"{slabel}\":\"{}\"", svg_bare(*tr, *sst)));
             }
             svgs.push('}');
+            svgs_bare.push('}');
             gal_json.push_str(&format!(
-                "{{\"id\":{id},\"name\":\"{name}\",\"state\":\"{label}\",\"balanceNear\":\"{bal}\",\"thoughts\":{thoughts},\"accent\":\"{}\",\"bg\":\"{}\",\"svgs\":{svgs}}}",
+                "{{\"id\":{id},\"name\":\"{name}\",\"state\":\"{label}\",\"balanceNear\":\"{bal}\",\"thoughts\":{thoughts},\"accent\":\"{}\",\"bg\":\"{}\",\"svgs\":{svgs},\"svgsBare\":{svgs_bare}}}",
                 pal.accent, pal.bg0
             ));
         }
         gal_json.push(']');
 
         let json = format!(
-            "{{\"hero\":{{\"name\":\"Juno\",\"accent\":\"{}\",\"bg\":\"{}\",\"states\":{hero_json}}},\"gallery\":{gal_json}}}",
+            "{{\"hero\":{{\"name\":\"Juno\",\"accent\":\"{}\",\"bg\":\"{}\",\"states\":{hero_json},\"statesBare\":{hero_bare_json}}},\"gallery\":{gal_json}}}",
             hero_pal.accent, hero_pal.bg0
         );
         let out = std::env::var("SAMPLES_OUT").unwrap_or_else(|_| "sample-minds.json".to_string());
