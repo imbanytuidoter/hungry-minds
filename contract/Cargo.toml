@@ -4,6 +4,18 @@ version = "0.1.0"
 edition = "2021"
 description = "Hungry Minds — NEP-171 AI-pet that pays for its own thoughts. Core logic crate (near-sdk wired in later)."
 
-# near-sdk / near-contract-standards are added in a later TDD cycle, once the
-# pure logic below is green. Keeping deps empty here makes red/green instant.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
+near-sdk = "=5.29.1"
+near-contract-standards = "=5.29.1"
+
+[dev-dependencies]
+near-sdk = { version = "=5.29.1", features = ["unit-testing"] }
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+overflow-checks = true
