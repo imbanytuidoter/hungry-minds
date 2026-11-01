@@ -182,10 +182,11 @@ impl Contract {
         let t = traits::derive_traits(&env::random_seed());
         let now = env::block_timestamp();
         let id = self.next_id;
+        let owner = env::predecessor_account_id();
         self.minds.insert(
             id,
             Mind {
-                owner: env::predecessor_account_id(),
+                owner: owner.clone(),
                 name,
                 traits: [
                     t.temperament,
@@ -206,6 +207,14 @@ impl Contract {
             },
         );
         self.next_id += 1;
+
+        let token_id = id.to_string();
+        near_contract_standards::non_fungible_token::events::NftMint {
+            owner_id: owner.as_ref(),
+            token_ids: &[token_id.as_str()],
+            memo: None,
+        }
+        .emit();
         id
     }
 
@@ -288,6 +297,49 @@ impl Contract {
         // Return the 0.25 NEAR that was locked for this Mind's storage at hatch.
         let _ = near_sdk::Promise::new(owner)
             .transfer(NearToken::from_yoctonear(economy::MINT_STORAGE_RESERVE));
+    }
+
+    /// NEP-171 transfer. A Mind is sold whole: its food balance, traits, and memory
+    /// (all keyed to the token) travel to the new owner untouched. The ONE thing that
+    /// does not travel is the departing owner's unclaimed guest-chat cut — that is
+    /// settled to them on the way out, so a buyer never inherits someone else's earnings.
+    #[payable]
+    pub fn nft_transfer(
+        &mut self,
+        receiver_id: AccountId,
+        token_id: String,
+        approval_id: Option<u64>,
+        memo: Option<String>,
+    ) {
+        near_sdk::assert_one_yocto();
+        let _ = approval_id; // approvals (NEP-178 / marketplaces) are a STRETCH, not yet honoured
+        let id: u64 = token_id.parse().expect("token_id must be a number");
+        let sender = env::predecessor_account_id();
+        let old_owner = {
+            let mind = self.minds.get(&id).expect("no such Mind");
+            assert_eq!(sender, mind.owner, "only the token owner can transfer it");
+            assert!(receiver_id != mind.owner, "cannot transfer a Mind to its current owner");
+            mind.owner.clone()
+        };
+
+        // Settle the departing owner's unclaimed guest-chat cut so the buyer never inherits it.
+        let cut = self.take_owner_earnings(id);
+        if cut.as_yoctonear() > 0 {
+            let _ = near_sdk::Promise::new(old_owner.clone()).transfer(cut);
+        }
+
+        // Hand over the token. Balance, traits and memory are keyed to the token id,
+        // so they travel to the new owner untouched.
+        self.minds.get_mut(&id).unwrap().owner = receiver_id.clone();
+
+        near_contract_standards::non_fungible_token::events::NftTransfer {
+            old_owner_id: old_owner.as_ref(),
+            new_owner_id: receiver_id.as_ref(),
+            token_ids: &[token_id.as_str()],
+            authorized_id: None,
+            memo: memo.as_deref(),
+        }
+        .emit();
     }
 }
 
@@ -563,5 +615,49 @@ mod tests {
             .insert(0, make_mind(NearToken::from_yoctonear(0), true, 500));
         testing_env!(ctx_at("keeper.near", u64::MAX).build());
         c.reap(0);
+    }
+
+    // --- nft_transfer: sold whole ---
+    #[test]
+    fn transfer_carries_balance_and_memory_and_settles_the_old_owners_cut() {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string()); // alice owns token 0
+        // a guest chat accrues alice's 20% cut and raises the Mind's own balance + memory
+        testing_env!(ctx_from("bob.near", NearToken::from_millinear(10)).build());
+        c.chat(0, "hi".to_string());
+        let balance = c.get_mind(0).unwrap().balance;
+        let thoughts = c.get_mind(0).unwrap().thought_count;
+        assert!(c.get_mind(0).unwrap().owner_unclaimed.as_yoctonear() > 0);
+
+        // alice sells to carol with exactly 1 yocto
+        testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(1)).build());
+        c.nft_transfer("carol.near".parse().unwrap(), "0".to_string(), None, None);
+
+        let m = c.get_mind(0).unwrap();
+        assert_eq!(m.owner, "carol.near".parse::<AccountId>().unwrap()); // new owner
+        assert_eq!(m.balance, balance); // the Mind's food travels, untouched
+        assert_eq!(m.thought_count, thoughts); // memory travels
+        assert_eq!(m.owner_unclaimed, NearToken::from_yoctonear(0)); // alice's cut settled out
+    }
+
+    #[test]
+    #[should_panic(expected = "owner")]
+    fn only_the_owner_can_transfer() {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string());
+        testing_env!(ctx_from("bob.near", NearToken::from_yoctonear(1)).build());
+        c.nft_transfer("carol.near".parse().unwrap(), "0".to_string(), None, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "yocto")]
+    fn transfer_requires_exactly_one_yocto() {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string());
+        testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(0)).build());
+        c.nft_transfer("carol.near".parse().unwrap(), "0".to_string(), None, None);
     }
 }
