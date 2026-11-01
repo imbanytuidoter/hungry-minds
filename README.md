@@ -12,7 +12,7 @@ the creature.
 That one rule — a token with a wallet it spends down by living — is the whole product.
 Everything else (the art, the economy, the lifecycle) follows from it.
 
-> Status: the on-chain contract is built and tested (53 unit tests, builds to wasm). The
+> Status: the on-chain contract is built and tested (57 unit tests, builds to wasm). The
 > live "brain" dispatch (OutLayer TEE → NEAR AI → signed reply → yield/resume) is wired as
 > a logged request pending a testnet ABI check — see [Honest status](#honest-status). This
 > README describes only what the code in this repo actually does today.
@@ -46,7 +46,7 @@ to closed eyes with drifting z's asleep, to a hollow, dashed, floating ghost. Se
 ## Build & test
 
 ```bash
-# unit tests (53 of them)
+# unit tests (57 of them)
 cargo test --manifest-path contract/Cargo.toml
 
 # the deployable wasm artifact
@@ -86,14 +86,18 @@ Against a deployed contract `MIND`, with accounts `alice` (owner) and `bob` (str
 ## Honest status
 
 - **Done and tested in this repo:** the full Mind lifecycle and economy above, the on-chain
-  SVG art, and the NEP-171 / NEP-177 / NEP-181 surface (`nft_metadata`, `nft_token`,
-  enumeration, `nft_transfer` / `nft_transfer_call` with standard events). 53 unit tests;
-  builds to wasm.
-- **Not done yet (pending testnet ABI):** the real thinking dispatch. `think` and `chat`
-  currently validate state, move the money, and **log** the request; the signed reply from
-  the OutLayer TEE via NEAR AI and the `yield`/`resume` callback that writes it back are the
-  next milestone and depend on confirming the OutLayer contract ABI on testnet.
-- **Needs a person, not code:** a NEAR AI credit key to fund a demo Mind's thoughts, the
+  SVG art, the NEP-171 / NEP-177 / NEP-181 surface (`nft_metadata`, `nft_token`, enumeration,
+  `nft_transfer` / `nft_transfer_call` with standard events), and the **thinking brain**:
+  `think`/`chat` park a yielded promise (`Promise::new_yield`) and store the request; an
+  off-chain worker ([`worker/`](worker/)) polls `pending_requests`, asks NEAR AI for an
+  in-character reply, and calls `respond` to resume it; `on_thought` stores the reply or
+  refunds the thought on a 200-block timeout. 57 unit tests; builds to wasm.
+- **Not done yet:** deploy to testnet + wire the web to it ([DEPLOY.md](DEPLOY.md) has the
+  commands); and the **verified-TEE** upgrade — running the worker's exact prompt→NEAR AI
+  step inside an OutLayer TEE enclave so the "verified ✓" badge is a signed attestation
+  rather than trust (the on-chain `respond` path is unchanged; the signature is checked
+  off-chain). The functional brain already works without it.
+- **Needs a person, not code:** a NEAR AI credit key for the demo Mind's thoughts, the
   testnet deployment account, and the final submission.
 
 Built for NEAR HACKATHON 2026.
