@@ -15,9 +15,9 @@ pub const N_PATTERN: u8 = 4;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Traits {
-    pub temperament: u8, // 0..N_TEMPERAMENT ; also the palette index
-    pub passion: u8,     // 0..N_PASSION ; also drives the accessory theme
-    pub speech: u8,      // 0..N_SPEECH
+    pub temperament: u8, // 0..N_TEMPERAMENT ; also the palette index (visual)
+    pub passion: u8,     // 0..N_PASSION ; behavioural only — shapes the AI voice, not the art
+    pub speech: u8,      // 0..N_SPEECH ; behavioural only — verbal tics, not the art
     pub body: u8,        // 0..N_BODY
     pub eyes: u8,        // 0..N_EYES
     pub accessory: u8,   // 0..N_ACCESSORY

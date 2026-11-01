@@ -1,9 +1,10 @@
-//! On-chain art. A Mind's whole appearance is assembled here from its 7 traits
-//! and its current life-state — no image is stored, the SVG is a pure function of
-//! state, so `svg_for` always renders the *current* creature (full, hungry,
-//! asleep, ghost). Design concept (build plan §17): a small window into a living
-//! creature. Temperament is the room's weather (the palette); hunger is written
-//! on the face; the other traits make each one unmistakably itself.
+//! On-chain art. A Mind's appearance is assembled here from its visual traits and
+//! its current life-state — no image is stored, the SVG is a pure function of state,
+//! so `svg_for` always renders the *current* creature (full, hungry, asleep, ghost).
+//! Design concept (build plan §17): a small window into a living creature. Temperament
+//! is the room's weather (the palette); hunger is written on the face; body, eyes,
+//! accessory and pattern make each one itself. (Passion and speech are behavioural
+//! dials — they shape the AI voice, not the picture.)
 //!
 //! Pure + deterministic: unit-tested without near-sdk.
 
@@ -18,12 +19,13 @@ pub enum Appearance {
     Ghost,
 }
 
-/// Everything the renderer needs: the 7 trait dials and the current state.
-pub struct Face<'a> {
+/// Everything the renderer needs: the 7 trait dials and the current state. The name
+/// is deliberately NOT here — no owner-chosen text reaches the SVG, so the markup is a
+/// closed template of fixed palette hex + numeric coords and needs no XML escaping.
+pub struct Face {
     /// [temperament, passion, speech, body, eyes, accessory, pattern]
     pub traits: [u8; 7],
     pub appearance: Appearance,
-    pub name: &'a str,
 }
 
 /// One temperament's palette: the room's weather + the creature's own colours.
@@ -269,7 +271,7 @@ pub fn render(face: &Face) -> String {
     let opacity = state_opacity(a);
 
     format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 120\" width=\"120\" height=\"120\" role=\"img\">\
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 120\" width=\"120\" height=\"120\">\
 <defs><linearGradient id=\"bg{gid}\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\
 <stop offset=\"0\" stop-color=\"{bg0}\"/><stop offset=\"1\" stop-color=\"{bg1}\"/></linearGradient></defs>\
 <rect width=\"120\" height=\"120\" rx=\"16\" fill=\"url(#bg{gid})\"/>\
@@ -289,11 +291,7 @@ mod tests {
     use super::*;
 
     fn face(traits: [u8; 7], appearance: Appearance) -> String {
-        render(&Face {
-            traits,
-            appearance,
-            name: "Rue",
-        })
+        render(&Face { traits, appearance })
     }
 
     #[test]
@@ -369,7 +367,7 @@ mod tests {
             (Full, "Full"), (Content, "Content"), (Hungry, "Hungry"),
             (Starving, "Starving"), (Asleep, "Asleep"), (Ghost, "Ghost"),
         ] {
-            cell(format!("arc · {name}"), render(&Face { traits: arc, appearance: st, name: "Rue" }));
+            cell(format!("arc · {name}"), render(&Face { traits: arc, appearance: st }));
         }
 
         // All eight temperaments, Full, so the palettes sit side by side.
@@ -377,7 +375,7 @@ mod tests {
         for (i, tn) in temps.iter().enumerate() {
             cell(format!("temp · {tn}"), render(&Face {
                 traits: [i as u8, i as u8, 0, (i % 6) as u8, (i % 8) as u8, (i % 10) as u8, (i % 4) as u8],
-                appearance: Full, name: "T",
+                appearance: Full,
             }));
         }
 
@@ -385,7 +383,7 @@ mod tests {
         for i in 0..8u8 {
             cell(format!("var · {i}"), render(&Face {
                 traits: [(i * 3) % 8, (i * 5) % 8, i % 5, i % 6, i % 8, (i * 7) % 10, i % 4],
-                appearance: Full, name: "V",
+                appearance: Full,
             }));
         }
 
@@ -415,8 +413,8 @@ figcaption{{margin-top:8px;font-size:11px;color:#79828f}}</style>\
         fn esc(s: &str) -> String {
             s.replace('\\', "\\\\").replace('"', "\\\"")
         }
-        fn svg(traits: [u8; 7], a: Appearance, name: &str) -> String {
-            esc(&render(&Face { traits, appearance: a, name }))
+        fn svg(traits: [u8; 7], a: Appearance) -> String {
+            esc(&render(&Face { traits, appearance: a }))
         }
 
         // Hero: one creature across its whole life, keyed by state.
@@ -429,7 +427,7 @@ figcaption{{margin-top:8px;font-size:11px;color:#79828f}}</style>\
         let mut hero_json = String::from("{");
         for (i, (label, st)) in states.iter().enumerate() {
             if i > 0 { hero_json.push(','); }
-            hero_json.push_str(&format!("\"{label}\":\"{}\"", svg(hero, *st, "Juno")));
+            hero_json.push_str(&format!("\"{label}\":\"{}\"", svg(hero, *st)));
         }
         hero_json.push('}');
         let hero_pal = pal_of(hero);
@@ -460,7 +458,7 @@ figcaption{{margin-top:8px;font-size:11px;color:#79828f}}</style>\
             let mut svgs = String::from("{");
             for (j, (slabel, sst)) in states.iter().enumerate() {
                 if j > 0 { svgs.push(','); }
-                svgs.push_str(&format!("\"{slabel}\":\"{}\"", svg(*tr, *sst, name)));
+                svgs.push_str(&format!("\"{slabel}\":\"{}\"", svg(*tr, *sst)));
             }
             svgs.push('}');
             gal_json.push_str(&format!(

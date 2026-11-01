@@ -16,7 +16,32 @@ use near_contract_standards::non_fungible_token::metadata::{
 use near_contract_standards::non_fungible_token::Token;
 use near_sdk::json_types::U128;
 use near_sdk::store::IterableMap;
-use near_sdk::{env, near, AccountId, NearToken};
+use near_sdk::{env, ext_contract, near, AccountId, Gas, NearToken, PromiseOrValue};
+
+/// The receiver interface for `nft_transfer_call` (NEP-171 core).
+#[allow(dead_code)] // the #[ext_contract] macro consumes this to generate ext_nft_receiver
+#[ext_contract(ext_nft_receiver)]
+trait NftReceiver {
+    fn nft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        previous_owner_id: AccountId,
+        token_id: String,
+        msg: String,
+    ) -> PromiseOrValue<bool>;
+}
+
+const GAS_FOR_NFT_ON_TRANSFER: Gas = Gas::from_tgas(30);
+const GAS_FOR_RESOLVE_TRANSFER: Gas = Gas::from_tgas(10);
+
+/// Decide, from the receiver's `nft_on_transfer` outcome, whether to revert the transfer.
+/// A successful call returning `true` — or any failure — means "return the token".
+fn should_revert(result: Result<bool, ()>) -> bool {
+    match result {
+        Ok(wants_return) => wants_return,
+        Err(()) => true,
+    }
+}
 
 /// One Mind's on-chain state.
 #[near(serializers = [json, borsh])]
@@ -121,7 +146,6 @@ impl Contract {
         let svg = art::render(&art::Face {
             traits: mind.traits,
             appearance: mind.appearance(),
-            name: &mind.name,
         });
         let media = format!("data:image/svg+xml;base64,{}", BASE64.encode(svg.as_bytes()));
         let state = self.mind_state(id).unwrap_or_default();
@@ -159,6 +183,42 @@ impl Contract {
         let amount = mind.owner_unclaimed;
         mind.owner_unclaimed = NearToken::from_yoctonear(0);
         amount
+    }
+
+    /// Settle the departing owner's unclaimed cut and move the token to `receiver_id`.
+    /// Shared by nft_transfer and nft_transfer_call. Returns the previous owner.
+    fn hand_over(
+        &mut self,
+        id: u64,
+        sender: &AccountId,
+        receiver_id: &AccountId,
+        memo: &Option<String>,
+    ) -> AccountId {
+        let old_owner = {
+            let mind = self.minds.get(&id).expect("no such Mind");
+            assert_eq!(*sender, mind.owner, "only the token owner can transfer it");
+            assert!(*receiver_id != mind.owner, "cannot transfer a Mind to its current owner");
+            mind.owner.clone()
+        };
+        // Settle the departing owner's unclaimed guest-chat cut so the buyer never inherits it.
+        let cut = self.take_owner_earnings(id);
+        if cut.as_yoctonear() > 0 {
+            let _ = near_sdk::Promise::new(old_owner.clone()).transfer(cut);
+        }
+        // Hand over the token. The Mind's balance, traits and life-so-far (born time,
+        // thought count) are keyed to the token id, so they travel with it untouched.
+        self.minds.get_mut(&id).unwrap().owner = receiver_id.clone();
+
+        let tid = id.to_string();
+        near_contract_standards::non_fungible_token::events::NftTransfer {
+            old_owner_id: old_owner.as_ref(),
+            new_owner_id: receiver_id.as_ref(),
+            token_ids: &[tid.as_str()],
+            authorized_id: None,
+            memo: memo.as_deref(),
+        }
+        .emit();
+        old_owner
     }
 }
 
@@ -206,7 +266,6 @@ impl Contract {
             art::render(&art::Face {
                 traits: m.traits,
                 appearance: m.appearance(),
-                name: &m.name,
             })
         })
     }
@@ -238,10 +297,11 @@ impl Contract {
         U128(self.minds.len() as u128)
     }
 
-    /// A page of all tokens (NEP-181).
+    /// A page of all tokens (NEP-181). Each token re-renders its SVG, so the page is
+    /// capped at 50 to keep a single view call bounded.
     pub fn nft_tokens(&self, from_index: Option<U128>, limit: Option<u64>) -> Vec<Token> {
         let from = from_index.map(|U128(i)| i as usize).unwrap_or(0);
-        let lim = limit.unwrap_or(u64::MAX) as usize;
+        let lim = limit.map(|l| (l as usize).min(50)).unwrap_or(50);
         self.minds
             .iter()
             .skip(from)
@@ -263,7 +323,7 @@ impl Contract {
         limit: Option<u64>,
     ) -> Vec<Token> {
         let from = from_index.map(|U128(i)| i as usize).unwrap_or(0);
-        let lim = limit.unwrap_or(u64::MAX) as usize;
+        let lim = limit.map(|l| (l as usize).min(50)).unwrap_or(50);
         self.minds
             .iter()
             .filter(|(_, m)| m.owner == account_id)
@@ -279,6 +339,9 @@ impl Contract {
     pub fn hatch_mind(&mut self, name: String) -> u64 {
         let deposit = env::attached_deposit().as_yoctonear();
         assert!(deposit >= economy::MINT_PRICE, "hatch needs at least 2 NEAR");
+        // Bound the one free-form field so a long name can't lock more storage stake
+        // than the 0.25 NEAR reserve ever refunds.
+        assert!(!name.is_empty() && name.len() <= 32, "name must be 1..=32 bytes");
         let split = economy::mint_split(deposit);
         self.treasury = self
             .treasury
@@ -360,6 +423,9 @@ impl Contract {
         let caller = env::predecessor_account_id();
         let now = env::block_timestamp();
         let deposit = env::attached_deposit().as_yoctonear();
+        // A guest must cover the thought they trigger, or a free-rider could drain the
+        // Mind's food 0.002 at a time for only gas. See economy::GUEST_PRICE.
+        assert!(deposit >= economy::GUEST_PRICE, "chat costs at least 0.01 NEAR");
         {
             let mind = self.minds.get(&id).expect("no such Mind");
             assert!(caller != mind.owner, "use think() for your own Mind");
@@ -384,27 +450,31 @@ impl Contract {
         }
     }
 
-    /// Reap a Mind that has slept past `GHOST_AFTER_NS` into a ghost and refund
-    /// its locked storage reserve to the owner. Callable by anyone (a keeper
-    /// action); on the testnet demo build the window is minutes, not 30 days.
+    /// Reap a Mind that has slept past `GHOST_AFTER_NS` into a ghost and credit its
+    /// 0.25 NEAR hatch reserve back to the owner as a claimable rebate. Callable by
+    /// anyone (a keeper action); on the testnet demo build the window is minutes.
     pub fn reap(&mut self, id: u64) {
         let now = env::block_timestamp();
-        let owner = {
+        {
             let mind = self.minds.get(&id).expect("no such Mind");
             assert!(!mind.ghost, "already a ghost");
             assert!(
                 crate::state::is_reapable(mind.asleep_since, now),
                 "not ready to reap — still within the sleep window"
             );
-            mind.owner.clone()
-        };
-        self.minds.get_mut(&id).unwrap().ghost = true;
-        // Return the 0.25 NEAR that was locked for this Mind's storage at hatch.
-        let _ = near_sdk::Promise::new(owner)
-            .transfer(NearToken::from_yoctonear(economy::MINT_STORAGE_RESERVE));
+        }
+        let mind = self.minds.get_mut(&id).unwrap();
+        mind.ghost = true;
+        // Credit the hatch reserve to the owner as a *claimable* amount (pull pattern):
+        // a push transfer to a stored owner account that has since been deleted would
+        // strand the funds after ghost=true is committed. The owner withdraws it via
+        // claim_earnings (which works on a ghost too).
+        mind.owner_unclaimed = mind
+            .owner_unclaimed
+            .saturating_add(NearToken::from_yoctonear(economy::MINT_STORAGE_RESERVE));
     }
 
-    /// NEP-171 transfer. A Mind is sold whole: its food balance, traits, and memory
+    /// NEP-171 transfer. A Mind is sold whole: its food balance, traits and life-so-far
     /// (all keyed to the token) travel to the new owner untouched. The ONE thing that
     /// does not travel is the departing owner's unclaimed guest-chat cut — that is
     /// settled to them on the way out, so a buyer never inherits someone else's earnings.
@@ -420,31 +490,74 @@ impl Contract {
         let _ = approval_id; // approvals (NEP-178 / marketplaces) are a STRETCH, not yet honoured
         let id: u64 = token_id.parse().expect("token_id must be a number");
         let sender = env::predecessor_account_id();
-        let old_owner = {
-            let mind = self.minds.get(&id).expect("no such Mind");
-            assert_eq!(sender, mind.owner, "only the token owner can transfer it");
-            assert!(receiver_id != mind.owner, "cannot transfer a Mind to its current owner");
-            mind.owner.clone()
+        self.hand_over(id, &sender, &receiver_id, &memo);
+    }
+
+    /// NEP-171 transfer-and-call: move the token, then invoke `nft_on_transfer` on the
+    /// receiver; if it asks to return the token (or fails), `nft_resolve_transfer` reverts
+    /// ownership. This is what marketplaces and receiver contracts use.
+    #[payable]
+    pub fn nft_transfer_call(
+        &mut self,
+        receiver_id: AccountId,
+        token_id: String,
+        approval_id: Option<u64>,
+        memo: Option<String>,
+        msg: String,
+    ) -> PromiseOrValue<bool> {
+        near_sdk::assert_one_yocto();
+        let _ = approval_id;
+        let id: u64 = token_id.parse().expect("token_id must be a number");
+        let sender = env::predecessor_account_id();
+        let old_owner = self.hand_over(id, &sender, &receiver_id, &memo);
+
+        ext_nft_receiver::ext(receiver_id.clone())
+            .with_static_gas(GAS_FOR_NFT_ON_TRANSFER)
+            .nft_on_transfer(sender, old_owner.clone(), token_id.clone(), msg)
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(GAS_FOR_RESOLVE_TRANSFER)
+                    .nft_resolve_transfer(old_owner, receiver_id, token_id),
+            )
+            .into()
+    }
+
+    /// Callback after `nft_on_transfer`. Returns true if the receiver kept the token;
+    /// if it asked to return it (or the call failed), ownership is reverted.
+    #[private]
+    pub fn nft_resolve_transfer(
+        &mut self,
+        previous_owner_id: AccountId,
+        receiver_id: AccountId,
+        token_id: String,
+    ) -> bool {
+        // A bool is a few bytes; cap the read. Ok -> parse the receiver's answer,
+        // Err (failed or oversized) -> treat as "return the token".
+        let outcome = match env::promise_result_checked(0, 16) {
+            Ok(value) => Ok(near_sdk::serde_json::from_slice::<bool>(&value).unwrap_or(false)),
+            Err(_) => Err(()),
         };
-
-        // Settle the departing owner's unclaimed guest-chat cut so the buyer never inherits it.
-        let cut = self.take_owner_earnings(id);
-        if cut.as_yoctonear() > 0 {
-            let _ = near_sdk::Promise::new(old_owner.clone()).transfer(cut);
+        if !should_revert(outcome) {
+            return true; // the receiver kept it; the transfer stands
         }
-
-        // Hand over the token. Balance, traits and memory are keyed to the token id,
-        // so they travel to the new owner untouched.
-        self.minds.get_mut(&id).unwrap().owner = receiver_id.clone();
-
-        near_contract_standards::non_fungible_token::events::NftTransfer {
-            old_owner_id: old_owner.as_ref(),
-            new_owner_id: receiver_id.as_ref(),
-            token_ids: &[token_id.as_str()],
-            authorized_id: None,
-            memo: memo.as_deref(),
+        // Revert ownership to the previous owner, but only if the receiver still holds it.
+        if let Ok(id) = token_id.parse::<u64>() {
+            if let Some(mind) = self.minds.get_mut(&id) {
+                if mind.owner == receiver_id {
+                    mind.owner = previous_owner_id.clone();
+                    let tid = id.to_string();
+                    near_contract_standards::non_fungible_token::events::NftTransfer {
+                        old_owner_id: receiver_id.as_ref(),
+                        new_owner_id: previous_owner_id.as_ref(),
+                        token_ids: &[tid.as_str()],
+                        authorized_id: None,
+                        memo: Some("nft_transfer_call reverted"),
+                    }
+                    .emit();
+                }
+            }
         }
-        .emit();
+        false
     }
 }
 
@@ -508,6 +621,22 @@ mod tests {
         testing_env!(ctx(NearToken::from_near(1), seed_all(0)).build());
         let mut c = Contract::default();
         c.hatch_mind("x".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "name must be")]
+    fn hatch_rejects_an_overlong_name() {
+        testing_env!(ctx(NearToken::from_near(2), seed_all(0)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("x".repeat(33));
+    }
+
+    #[test]
+    #[should_panic(expected = "name must be")]
+    fn hatch_rejects_an_empty_name() {
+        testing_env!(ctx(NearToken::from_near(2), seed_all(0)).build());
+        let mut c = Contract::default();
+        c.hatch_mind(String::new());
     }
 
     // --- spend_one_thought ---
@@ -610,6 +739,17 @@ mod tests {
         let mut c = Contract::default();
         c.hatch_mind("Rue".to_string());
         testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build());
+        c.chat(0, "hi".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "at least 0.01 NEAR")]
+    fn guest_chat_below_the_price_is_rejected() {
+        // A free-rider attaching 0 must not be able to spend the Mind's food.
+        testing_env!(ctx_from("alice.near", NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string());
+        testing_env!(ctx_from("bob.near", NearToken::from_yoctonear(0)).build());
         c.chat(0, "hi".to_string());
     }
 
@@ -766,6 +906,19 @@ mod tests {
         c.reap(0);
     }
 
+    #[test]
+    fn reaping_credits_the_storage_rebate_to_the_owner_to_claim() {
+        let asleep = 1_000_000_000u64;
+        let mut c = Contract::default();
+        c.minds
+            .insert(0, make_mind(NearToken::from_yoctonear(0), false, asleep));
+        testing_env!(ctx_at("keeper.near", asleep + crate::state::GHOST_AFTER_NS).build());
+        c.reap(0);
+        // 0.25 NEAR reserve becomes claimable (pull pattern), the Mind's balance untouched.
+        assert_eq!(c.get_mind(0).unwrap().owner_unclaimed, NearToken::from_millinear(250));
+        assert_eq!(c.get_mind(0).unwrap().balance, NearToken::from_yoctonear(0));
+    }
+
     // --- nft_transfer: sold whole ---
     #[test]
     fn transfer_carries_balance_and_memory_and_settles_the_old_owners_cut() {
@@ -808,5 +961,30 @@ mod tests {
         c.hatch_mind("Rue".to_string());
         testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(0)).build());
         c.nft_transfer("carol.near".parse().unwrap(), "0".to_string(), None, None);
+    }
+
+    // --- nft_transfer_call ---
+    #[test]
+    fn should_revert_only_when_receiver_returns_or_fails() {
+        assert!(!should_revert(Ok(false))); // receiver kept it
+        assert!(should_revert(Ok(true))); // receiver returned it
+        assert!(should_revert(Err(()))); // receiver call failed
+    }
+
+    #[test]
+    fn transfer_call_hands_the_token_over_before_the_receiver_runs() {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string());
+        testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(1)).build());
+        let _ = c.nft_transfer_call(
+            "market.near".parse().unwrap(),
+            "0".to_string(),
+            None,
+            None,
+            "list".to_string(),
+        );
+        // Ownership moves synchronously; nft_resolve_transfer may revert it later.
+        assert_eq!(c.get_mind(0).unwrap().owner, "market.near".parse::<AccountId>().unwrap());
     }
 }

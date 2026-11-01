@@ -14,6 +14,11 @@ pub const MINT_STORAGE_RESERVE: u128 = ONE_NEAR / 4; // 0.25 NEAR locked for sta
 /// What one reply ("thought") burns from a Mind's balance. 1 NEAR ~= 500 thoughts.
 pub const THOUGHT_COMPUTE_COST: u128 = ONE_NEAR / 500; // 0.002 NEAR
 
+/// The minimum a stranger must attach to `chat`. It guarantees the guest covers the
+/// thought they trigger — guest_split(GUEST_PRICE).to_mind = 0.007 NEAR, well above
+/// THOUGHT_COMPUTE_COST — so a free-rider can never drain a Mind's own food.
+pub const GUEST_PRICE: u128 = ONE_NEAR / 100; // 0.01 NEAR
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct MintSplit {
     pub seed: u128,
