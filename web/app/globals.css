@@ -280,3 +280,124 @@ a {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ── Mind detail ───────────────────────────────────────────────────────────── */
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: 0.95fr 1.05fr;
+  gap: 48px;
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+}
+
+.talk {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.talk-log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 220px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.bubble {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+.bubble-you {
+  align-self: flex-end;
+  background: color-mix(in oklab, var(--accent) 22%, var(--surface-2));
+  color: var(--text);
+  border-bottom-right-radius: 5px;
+}
+.bubble-mind {
+  align-self: flex-start;
+  background: var(--surface-2);
+  color: var(--text);
+  border-bottom-left-radius: 5px;
+}
+.bubble-system {
+  align-self: center;
+  text-align: center;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  max-width: 100%;
+}
+
+.talk-input {
+  display: flex;
+  gap: 10px;
+}
+.talk-input input {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+}
+.talk-input input::placeholder {
+  color: var(--text-dim);
+}
+.talk-input input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.talk-input input:disabled {
+  opacity: 0.6;
+}
+
+.onchain {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.onchain li {
+  position: relative;
+  padding-left: 18px;
+  color: var(--text-mid);
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+.onchain li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 9px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.onchain strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

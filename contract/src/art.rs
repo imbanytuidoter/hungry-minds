@@ -455,9 +455,17 @@ figcaption{{margin-top:8px;font-size:11px;color:#79828f}}</style>\
                 Starving => "starving", Asleep => "asleep", Ghost => "ghost",
             };
             let pal = pal_of(*tr);
+            // Every state's art for this exact creature, so the web app can show it
+            // change as it is fed or drained — all from the real renderer.
+            let mut svgs = String::from("{");
+            for (j, (slabel, sst)) in states.iter().enumerate() {
+                if j > 0 { svgs.push(','); }
+                svgs.push_str(&format!("\"{slabel}\":\"{}\"", svg(*tr, *sst, name)));
+            }
+            svgs.push('}');
             gal_json.push_str(&format!(
-                "{{\"id\":{id},\"name\":\"{name}\",\"state\":\"{label}\",\"balanceNear\":\"{bal}\",\"thoughts\":{thoughts},\"accent\":\"{}\",\"bg\":\"{}\",\"svg\":\"{}\"}}",
-                pal.accent, pal.bg0, svg(*tr, *st, name)
+                "{{\"id\":{id},\"name\":\"{name}\",\"state\":\"{label}\",\"balanceNear\":\"{bal}\",\"thoughts\":{thoughts},\"accent\":\"{}\",\"bg\":\"{}\",\"svgs\":{svgs}}}",
+                pal.accent, pal.bg0
             ));
         }
         gal_json.push(']');
