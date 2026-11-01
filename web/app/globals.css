@@ -1,0 +1,282 @@
+@import "tailwindcss";
+
+/* ── Hungry Minds design tokens ───────────────────────────────────────────
+   The chrome is quiet and near-black so the creatures glow. The accent is
+   NOT fixed: each view sets --accent to the current Mind's temperament colour,
+   so the room takes on the creature's weather. */
+:root {
+  --bg: #0b0d11;
+  --bg-deep: #07080b;
+  --surface: #14171e;
+  --surface-2: #1b1f28;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+
+  --text: #e8edf4;
+  --text-mid: #a9b2bf;
+  --text-dim: #6c7684;
+
+  /* Overridden per-view with the current Mind's colour. */
+  --accent: #b59cff;
+
+  --font-display: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-text: var(--text);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-sans);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Focus visible for keyboard users — part of the quality floor. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ── Primitives ──────────────────────────────────────────────────────────── */
+
+.wrap {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* A creature in its frame. The SVG already carries its own background. */
+.terrarium {
+  position: relative;
+  border-radius: 22px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  /* a soft glow in the Mind's own colour */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 30px 80px -40px var(--accent);
+}
+
+.terrarium svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* The creature breathes — the one ambient motion on the page. */
+.breathe {
+  animation: breathe 5.5s ease-in-out infinite;
+  transform-origin: 50% 62%;
+}
+@keyframes breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-1.2%) scale(1.012);
+  }
+}
+
+/* A Mind that is asleep or a ghost does not breathe like the living. */
+.still {
+  animation: none;
+}
+.drift {
+  animation: drift 7s ease-in-out infinite;
+}
+@keyframes drift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3%);
+  }
+}
+
+/* Mood tag — plain language, lower-case, in the Mind's colour. */
+.mood {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+  padding: 5px 11px;
+  border-radius: 999px;
+}
+.mood .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+/* Vital bar — the Mind's life, drawn as how full it is. */
+.vital {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.vital > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--accent) 60%, #000 10%),
+    var(--accent)
+  );
+  transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Buttons — the action names exactly what happens. No arrows, no shouting. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px 20px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn-primary {
+  background: var(--accent);
+  color: #0b0d11;
+}
+.btn-primary:hover {
+  filter: brightness(1.06);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.btn-ghost:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+.card:hover {
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--line));
+  transform: translateY(-2px);
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: 0.92fr 1.08fr;
+  gap: 56px;
+  align-items: center;
+}
+.hero-art {
+  max-width: 440px;
+  width: 100%;
+}
+
+.arc-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16px;
+}
+
+.how-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 40px;
+}
+
+.minds-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 18px;
+}
+
+@media (max-width: 860px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+  .hero-art {
+    max-width: 360px;
+    margin: 0 auto;
+    order: -1;
+  }
+  .arc-row {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .how-grid {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+}
+
+@media (max-width: 460px) {
+  .arc-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

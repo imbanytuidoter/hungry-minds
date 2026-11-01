@@ -405,4 +405,69 @@ figcaption{{margin-top:8px;font-size:11px;color:#79828f}}</style>\
         std::fs::write(&out, html).expect("write gallery");
         println!("gallery written to {out}");
     }
+
+    /// Exports the REAL contract art as JSON for the web app's preview mode, so the
+    /// site shows exactly what the chain renders. Run with SAMPLES_OUT set.
+    #[test]
+    #[ignore]
+    fn export_samples() {
+        use Appearance::*;
+        fn esc(s: &str) -> String {
+            s.replace('\\', "\\\\").replace('"', "\\\"")
+        }
+        fn svg(traits: [u8; 7], a: Appearance, name: &str) -> String {
+            esc(&render(&Face { traits, appearance: a, name }))
+        }
+
+        // Hero: one creature across its whole life, keyed by state.
+        let hero = [4u8, 3, 1, 0, 2, 4, 1]; // dreamer, teal, halo
+        let states = [
+            ("full", Full), ("content", Content), ("hungry", Hungry),
+            ("starving", Starving), ("asleep", Asleep), ("ghost", Ghost),
+        ];
+        let pal_of = |tr: [u8; 7]| &PALETTES[(tr[0] as usize) % PALETTES.len()];
+        let mut hero_json = String::from("{");
+        for (i, (label, st)) in states.iter().enumerate() {
+            if i > 0 { hero_json.push(','); }
+            hero_json.push_str(&format!("\"{label}\":\"{}\"", svg(hero, *st, "Juno")));
+        }
+        hero_json.push('}');
+        let hero_pal = pal_of(hero);
+
+        // Gallery: varied creatures across the arc, with believable demo vitals.
+        let gallery = [
+            (0u64, "Juno", [4u8, 3, 1, 0, 2, 4, 1], Full, "0.82", 41u64),
+            (1, "Rue", [0, 2, 2, 5, 1, 3, 0], Content, "0.31", 118),
+            (2, "Pip", [6, 5, 0, 1, 6, 6, 2], Full, "0.67", 9),
+            (3, "Moss", [3, 6, 3, 4, 4, 9, 3], Hungry, "0.041", 233),
+            (4, "Echo", [2, 0, 1, 3, 5, 1, 1], Full, "0.90", 27),
+            (5, "Sol", [1, 1, 4, 2, 2, 2, 0], Starving, "0.008", 402),
+            (6, "Wren", [7, 4, 2, 0, 7, 7, 2], Content, "0.22", 64),
+            (7, "Taro", [5, 7, 3, 1, 0, 0, 1], Full, "0.55", 3),
+            (8, "Nim", [2, 3, 1, 5, 4, 5, 3], Asleep, "0.000", 519),
+            (9, "Bump", [6, 2, 0, 4, 3, 8, 0], Ghost, "0.000", 712),
+        ];
+        let mut gal_json = String::from("[");
+        for (i, (id, name, tr, st, bal, thoughts)) in gallery.iter().enumerate() {
+            if i > 0 { gal_json.push(','); }
+            let label = match st {
+                Full => "full", Content => "content", Hungry => "hungry",
+                Starving => "starving", Asleep => "asleep", Ghost => "ghost",
+            };
+            let pal = pal_of(*tr);
+            gal_json.push_str(&format!(
+                "{{\"id\":{id},\"name\":\"{name}\",\"state\":\"{label}\",\"balanceNear\":\"{bal}\",\"thoughts\":{thoughts},\"accent\":\"{}\",\"bg\":\"{}\",\"svg\":\"{}\"}}",
+                pal.accent, pal.bg0, svg(*tr, *st, name)
+            ));
+        }
+        gal_json.push(']');
+
+        let json = format!(
+            "{{\"hero\":{{\"name\":\"Juno\",\"accent\":\"{}\",\"bg\":\"{}\",\"states\":{hero_json}}},\"gallery\":{gal_json}}}",
+            hero_pal.accent, hero_pal.bg0
+        );
+        let out = std::env::var("SAMPLES_OUT").unwrap_or_else(|_| "sample-minds.json".to_string());
+        std::fs::write(&out, json).expect("write samples");
+        println!("samples written to {out}");
+    }
 }
