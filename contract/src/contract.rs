@@ -6,6 +6,7 @@
 //! are built up via TDD. Full NEP-171 token registry is layered on later; the
 //! Mind lifecycle (the product's value) comes first.
 
+use crate::art::{self, Appearance};
 use crate::state::{hunger_state, HungerState};
 use crate::{economy, traits};
 use near_sdk::store::IterableMap;
@@ -52,6 +53,23 @@ impl Mind {
             self.asleep_since = now; // just spent its last affordable thought
         }
         true
+    }
+
+    /// The life-state the art should show, derived from balance + flags.
+    pub fn appearance(&self) -> Appearance {
+        if self.ghost {
+            return Appearance::Ghost;
+        }
+        if self.asleep_since != 0 {
+            return Appearance::Asleep;
+        }
+        match hunger_state(self.balance.as_yoctonear()) {
+            HungerState::Full => Appearance::Full,
+            HungerState::Content => Appearance::Content,
+            HungerState::Hungry => Appearance::Hungry,
+            HungerState::Starving => Appearance::Starving,
+            HungerState::Asleep => Appearance::Asleep,
+        }
     }
 }
 
@@ -135,6 +153,18 @@ impl Contract {
                 HungerState::Asleep => "asleep",
             }
             .to_string()
+        })
+    }
+
+    /// The Mind's current artwork as an inline SVG, assembled on-chain from its
+    /// traits + live state. Always renders the *current* creature.
+    pub fn svg_for(&self, id: u64) -> Option<String> {
+        self.minds.get(&id).map(|m| {
+            art::render(&art::Face {
+                traits: m.traits,
+                appearance: m.appearance(),
+                name: &m.name,
+            })
         })
     }
 
@@ -235,7 +265,8 @@ impl Contract {
         }
         let amount = self.take_owner_earnings(id);
         if amount.as_yoctonear() > 0 {
-            near_sdk::Promise::new(caller).transfer(amount);
+            // Dropping the Promise schedules it (near-sdk Promise::drop -> construct_recursively).
+            let _ = near_sdk::Promise::new(caller).transfer(amount);
         }
     }
 
@@ -255,7 +286,7 @@ impl Contract {
         };
         self.minds.get_mut(&id).unwrap().ghost = true;
         // Return the 0.25 NEAR that was locked for this Mind's storage at hatch.
-        near_sdk::Promise::new(owner)
+        let _ = near_sdk::Promise::new(owner)
             .transfer(NearToken::from_yoctonear(economy::MINT_STORAGE_RESERVE));
     }
 }
@@ -467,6 +498,28 @@ mod tests {
         assert_eq!(taken, NearToken::from_millinear(2)); // only the 20% cut
         assert_eq!(c.get_mind(0).unwrap().owner_unclaimed, NearToken::from_yoctonear(0));
         assert_eq!(c.get_mind(0).unwrap().balance, balance_before); // Mind's food untouched
+    }
+
+    // --- appearance / svg_for ---
+    #[test]
+    fn appearance_follows_balance_and_flags() {
+        assert_eq!(make_mind(NearToken::from_near(1), false, 0).appearance(), Appearance::Full);
+        assert_eq!(make_mind(NearToken::from_millinear(50), false, 0).appearance(), Appearance::Hungry);
+        assert_eq!(make_mind(NearToken::from_millinear(5), false, 0).appearance(), Appearance::Starving);
+        assert_eq!(make_mind(NearToken::from_near(1), false, 7).appearance(), Appearance::Asleep);
+        assert_eq!(make_mind(NearToken::from_near(1), true, 0).appearance(), Appearance::Ghost);
+    }
+
+    #[test]
+    fn svg_for_renders_current_state_and_is_none_when_absent() {
+        let mut c = Contract::default();
+        c.minds.insert(0, make_mind(NearToken::from_near(1), false, 0)); // full
+        c.minds.insert(1, make_mind(NearToken::from_near(1), true, 0)); // ghost
+        let full = c.svg_for(0).expect("some");
+        let ghost = c.svg_for(1).expect("some");
+        assert!(full.trim_start().starts_with("<svg"));
+        assert_ne!(full, ghost, "a ghost must not look like a full Mind");
+        assert_eq!(c.svg_for(99), None);
     }
 
     // --- reap -> ghost ---
