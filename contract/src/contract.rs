@@ -82,6 +82,10 @@ pub struct Mind {
     pub balance: NearToken,
     pub born_ts: u64,
     pub last_think_ts: u64,
+    /// Block timestamp metabolism was last settled against. Autonomous idle drain is charged
+    /// from here forward; reset to `now` whenever the Mind wakes, so a sleep gap is never
+    /// retroactively charged.
+    pub last_metabolism_ts: u64,
     /// 0 = awake; otherwise the block timestamp it fell asleep.
     pub asleep_since: u64,
     pub thought_count: u64,
@@ -179,6 +183,7 @@ pub struct EconomyParams {
     pub guest_min_price: NearToken,
     pub revive_price: NearToken,
     pub mint_price: NearToken,
+    pub idle_rate_per_day: u64,
 }
 
 #[near(contract_state)]
@@ -197,6 +202,8 @@ pub struct Contract {
     thought_cost: u128,
     guest_min_price: u128,
     revive_price: u128,
+    /// Autonomous metabolism rate: thoughts/day a neglected Mind burns from elapsed time alone.
+    idle_rate_per_day: u64,
 }
 
 impl Default for Contract {
@@ -210,6 +217,7 @@ impl Default for Contract {
             thought_cost: economy::THOUGHT_COMPUTE_COST,
             guest_min_price: economy::GUEST_PRICE,
             revive_price: economy::REVIVE_PRICE,
+            idle_rate_per_day: crate::state::DEFAULT_IDLE_RATE,
         }
     }
 }
@@ -335,6 +343,8 @@ impl Contract {
                     .saturating_add(NearToken::from_yoctonear(cost));
                 if mind.asleep_since != 0 && mind.balance.as_yoctonear() >= cost {
                     mind.asleep_since = 0;
+                    mind.last_metabolism_ts = now; // fresh clock on wake (as feed/revive do),
+                    // so the parked-sleep gap is not back-charged by the next settle
                 }
             }
         }
@@ -584,6 +594,7 @@ impl Contract {
                 balance: NearToken::from_yoctonear(split.seed),
                 born_ts: now,
                 last_think_ts: now,
+                last_metabolism_ts: now,
                 asleep_since: 0,
                 thought_count: 0,
                 ghost: false,
@@ -610,6 +621,8 @@ impl Contract {
     /// afford a thought. Ghosts must be revived, not fed.
     #[payable]
     pub fn feed(&mut self, id: u64) {
+        let now = env::block_timestamp();
+        self.settle_metabolism(id, now); // realise any overdue idle drain before topping up
         let split = economy::feed_split(env::attached_deposit().as_yoctonear());
         let cost = self.thought_cost;
         let mind = self.minds.get_mut(&id).expect("no such Mind");
@@ -619,6 +632,7 @@ impl Contract {
             .saturating_add(NearToken::from_yoctonear(split.to_mind));
         if mind.asleep_since != 0 && mind.balance.as_yoctonear() >= cost {
             mind.asleep_since = 0; // woke up
+            mind.last_metabolism_ts = now; // fresh clock — the asleep gap is not back-charged
         }
         self.treasury = self
             .treasury
@@ -635,7 +649,9 @@ impl Contract {
     pub fn revive(&mut self, id: u64) {
         let deposit = env::attached_deposit().as_yoctonear();
         assert!(deposit >= self.revive_price, "revive needs at least the revive price");
+        let now = env::block_timestamp();
         let cost = self.thought_cost;
+        self.settle_metabolism(id, now); // an awake-but-overdue Mind settles to asleep first
         let split = economy::revive_split(deposit);
         {
             let mind = self.minds.get_mut(&id).expect("no such Mind");
@@ -651,6 +667,7 @@ impl Contract {
                 "revive deposit too small to wake this Mind — attach more"
             );
             mind.asleep_since = 0; // guaranteed awake
+            mind.last_metabolism_ts = now; // fresh clock after waking
         }
         self.treasury = self
             .treasury
@@ -663,6 +680,7 @@ impl Contract {
         let caller = env::predecessor_account_id();
         let now = env::block_timestamp();
         let cost = self.thought_cost;
+        self.settle_metabolism(id, now); // a long-neglected Mind may already be asleep
         {
             let mind = self.minds.get_mut(&id).expect("no such Mind");
             assert_eq!(caller, mind.owner, "only the owner can use think()");
@@ -684,6 +702,7 @@ impl Contract {
         // A guest must cover the thought they trigger, or a free-rider could drain the
         // Mind's food one thought at a time for only gas. See `guest_min_price`.
         assert!(deposit >= self.guest_min_price, "chat deposit below the guest minimum");
+        self.settle_metabolism(id, now); // a just-starved Mind reads as asleep below
         {
             let mind = self.minds.get(&id).expect("no such Mind");
             assert!(caller != mind.owner, "use think() for your own Mind");
@@ -804,6 +823,7 @@ impl Contract {
             guest_min_price: NearToken::from_yoctonear(self.guest_min_price),
             revive_price: NearToken::from_yoctonear(self.revive_price),
             mint_price: NearToken::from_yoctonear(economy::MINT_PRICE),
+            idle_rate_per_day: self.idle_rate_per_day,
         }
     }
 
@@ -860,6 +880,110 @@ impl Contract {
         );
         self.revive_price = p;
         env::log_str(&format!("param_set revive_price={p}"));
+    }
+
+    /// Retune the autonomous-metabolism rate (thoughts/day a neglected Mind burns). Bounded by
+    /// MAX_IDLE_RATE; zero is rejected (the game needs metabolism to run).
+    pub fn set_idle_rate(&mut self, thoughts_per_day: u64) {
+        self.assert_admin();
+        assert!(thoughts_per_day > 0, "idle rate must be positive");
+        assert!(thoughts_per_day <= crate::state::MAX_IDLE_RATE, "idle rate above the ceiling");
+        self.idle_rate_per_day = thoughts_per_day;
+        env::log_str(&format!("param_set idle_rate_per_day={thoughts_per_day}"));
+    }
+
+    // --- Autonomous metabolism (neglect makes a Mind hungry over time) -------------------
+    // The contract has no cron, so idle drain is applied lazily: every interaction settles it
+    // first, and `settle` lets a keeper or the web app realise it on chain between touches.
+    // Read-only `live_*` views show the current, not-yet-settled state for free.
+
+    /// Charge a Mind's metabolism from its last settle up to `now`, flipping it to sleep if it
+    /// starves. No-op on a ghost or an already-asleep Mind (so a sleep gap is never charged).
+    fn settle_metabolism(&mut self, id: u64, now: u64) {
+        let rate = self.idle_rate_per_day;
+        let cost = self.thought_cost;
+        let mind = match self.minds.get_mut(&id) {
+            Some(m) => m,
+            None => return,
+        };
+        if mind.ghost || mind.asleep_since != 0 {
+            return;
+        }
+        let elapsed = now.saturating_sub(mind.last_metabolism_ts);
+        let (n, consumed) = crate::state::idle_thoughts(elapsed, rate);
+        if n == 0 {
+            return;
+        }
+        let drain = (n as u128).saturating_mul(cost);
+        let bal = mind.balance.as_yoctonear();
+        if drain >= bal {
+            mind.balance = NearToken::from_yoctonear(0);
+            mind.asleep_since = now; // starved into sleep
+            mind.last_metabolism_ts = now; // keep the clock current so a later wake-without-reset
+            // can never back-charge this already-settled interval
+        } else {
+            mind.balance = NearToken::from_yoctonear(bal - drain);
+            mind.last_metabolism_ts = mind.last_metabolism_ts.saturating_add(consumed);
+            if mind.balance.as_yoctonear() < cost {
+                mind.asleep_since = now; // too poor to afford even one thought
+            }
+        }
+    }
+
+    /// Permissionless keeper action: settle a Mind's metabolism now. Anyone (the web app, a
+    /// keeper, the worker) may call it; it only ever applies drain the Mind already owes.
+    pub fn settle(&mut self, id: u64) {
+        let now = env::block_timestamp();
+        self.settle_metabolism(id, now);
+    }
+
+    /// Effective food NOW, applying idle drain not yet settled on chain (read-only).
+    fn effective_balance(&self, m: &Mind, now: u64) -> u128 {
+        if m.ghost || m.asleep_since != 0 {
+            return m.balance.as_yoctonear();
+        }
+        let (n, _) = crate::state::idle_thoughts(
+            now.saturating_sub(m.last_metabolism_ts),
+            self.idle_rate_per_day,
+        );
+        let drain = (n as u128).saturating_mul(self.thought_cost);
+        m.balance.as_yoctonear().saturating_sub(drain)
+    }
+
+    /// A Mind's food RIGHT NOW, including idle drain not yet settled (read-only, no gas).
+    pub fn live_balance(&self, id: u64) -> Option<NearToken> {
+        let now = env::block_timestamp();
+        self.minds
+            .get(&id)
+            .map(|m| NearToken::from_yoctonear(self.effective_balance(m, now)))
+    }
+
+    /// A Mind's visible state RIGHT NOW, including idle drain not yet settled (read-only).
+    pub fn live_state(&self, id: u64) -> Option<String> {
+        let now = env::block_timestamp();
+        self.minds.get(&id).map(|m| {
+            if m.ghost {
+                return "ghost".to_string();
+            }
+            if m.asleep_since != 0 {
+                return "asleep".to_string();
+            }
+            let eff = self.effective_balance(m, now);
+            // Mirror settle's second sleep rule: below one thought the Mind cannot think, so
+            // the next settle/interaction would flip it asleep. Predict that here, else the
+            // view would say "starving" for a Mind any touch instantly puts to sleep.
+            if eff < self.thought_cost {
+                return "asleep".to_string();
+            }
+            match hunger_state(eff) {
+                HungerState::Full => "full",
+                HungerState::Content => "content",
+                HungerState::Hungry => "hungry",
+                HungerState::Starving => "starving",
+                HungerState::Asleep => "asleep",
+            }
+            .to_string()
+        })
     }
 
     /// NEP-171 transfer. A Mind is sold whole: its food balance, traits and life-so-far
@@ -1110,6 +1234,7 @@ mod tests {
             balance,
             born_ts: 0,
             last_think_ts: 0,
+            last_metabolism_ts: 0,
             asleep_since,
             thought_count: 0,
             ghost,
@@ -1558,6 +1683,144 @@ mod tests {
         // credit leaves the Mind 0.008 < 0.1, so no thought is charged -> chat must revert,
         // never parking a thought that a later timeout would refund as minted NEAR.
         let _ = c.chat(0, "hi".to_string());
+    }
+
+    // --- idle metabolism (neglect makes a Mind hungry over time) ---
+
+    #[test]
+    fn neglect_drains_an_awake_mind_over_time() {
+        let mut c = Contract::default(); // idle rate 10/day, thought cost 0.002
+        let mut m = make_mind(NearToken::from_near(1), false, 0);
+        m.last_metabolism_ts = 0;
+        c.minds.insert(0, m);
+        testing_env!(ctx_at("keeper.near", crate::state::NS_PER_DAY).build()); // one day later
+        c.settle(0);
+        // 10 autonomous thoughts * 0.002 = 0.02 drained
+        assert_eq!(
+            c.get_mind(0).unwrap().balance,
+            NearToken::from_yoctonear(crate::state::ONE_NEAR - crate::state::ONE_NEAR * 2 / 100)
+        );
+        assert_eq!(c.get_mind(0).unwrap().asleep_since, 0); // still well awake
+    }
+
+    #[test]
+    fn a_neglected_mind_starves_to_sleep_in_about_ten_days() {
+        let mut c = Contract::default();
+        let mut m = make_mind(NearToken::from_yoctonear(crate::state::ONE_NEAR / 5), false, 0); // 0.2 NEAR
+        m.last_metabolism_ts = 0;
+        c.minds.insert(0, m);
+        testing_env!(ctx_at("keeper.near", 10 * crate::state::NS_PER_DAY).build()); // the "Пил" arc
+        c.settle(0);
+        let after = c.get_mind(0).unwrap();
+        assert_eq!(after.balance, NearToken::from_yoctonear(0));
+        assert_eq!(after.asleep_since, 10 * crate::state::NS_PER_DAY); // fell asleep
+    }
+
+    #[test]
+    fn metabolism_leaves_asleep_and_ghost_minds_untouched() {
+        let mut c = Contract::default();
+        c.minds.insert(0, make_mind(NearToken::from_near(1), false, 500)); // asleep
+        c.minds.insert(1, make_mind(NearToken::from_near(1), true, 0)); // ghost
+        testing_env!(ctx_at("keeper.near", 100 * crate::state::NS_PER_DAY).build());
+        c.settle(0);
+        c.settle(1);
+        assert_eq!(c.get_mind(0).unwrap().balance, NearToken::from_near(1));
+        assert_eq!(c.get_mind(1).unwrap().balance, NearToken::from_near(1));
+    }
+
+    #[test]
+    fn feeding_a_starved_mind_resets_its_metabolism_clock() {
+        let mut c = Contract::default();
+        let mut m = make_mind(NearToken::from_yoctonear(crate::state::ONE_NEAR / 5), false, 0); // 0.2
+        m.last_metabolism_ts = 0;
+        c.minds.insert(0, m);
+        // owner feeds 1.0 long after neglect would have starved it
+        testing_env!(ctx_at("alice.near", 100 * crate::state::NS_PER_DAY)
+            .attached_deposit(NearToken::from_near(1))
+            .build());
+        c.feed(0);
+        let after = c.get_mind(0).unwrap();
+        assert_eq!(after.asleep_since, 0); // awake again
+        assert_eq!(after.last_metabolism_ts, 100 * crate::state::NS_PER_DAY); // clock reset, no back-charge
+        // starved to 0 by settle, then +0.95 of the 1.0 feed
+        assert_eq!(after.balance, NearToken::from_yoctonear(crate::state::ONE_NEAR * 95 / 100));
+    }
+
+    #[test]
+    fn live_views_show_decay_before_it_is_settled_on_chain() {
+        let mut c = Contract::default();
+        let mut m = make_mind(NearToken::from_near(1), false, 0);
+        m.last_metabolism_ts = 0;
+        c.minds.insert(0, m);
+        testing_env!(ctx_at("viewer.near", crate::state::NS_PER_DAY).build());
+        // read-only: effective balance is down 0.02, but the STORED balance is untouched
+        assert_eq!(
+            c.live_balance(0).unwrap(),
+            NearToken::from_yoctonear(crate::state::ONE_NEAR - crate::state::ONE_NEAR * 2 / 100)
+        );
+        assert_eq!(c.live_state(0).as_deref(), Some("full")); // 0.98 is still Full
+        assert_eq!(c.get_mind(0).unwrap().balance, NearToken::from_near(1)); // not yet persisted
+    }
+
+    #[test]
+    #[should_panic(expected = "asleep — feed it")]
+    fn think_settles_metabolism_first_so_a_starved_mind_cannot_think() {
+        testing_env!(admin_ctx(NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Dust".to_string()); // owner hm.near, balance 1.0, clock at ts 0
+        // 500 untouched days later the owner tries to think — metabolism has starved it
+        let mut b = VMContextBuilder::new();
+        b.current_account_id("hm.near".parse().unwrap())
+            .predecessor_account_id("hm.near".parse().unwrap())
+            .block_timestamp(500 * crate::state::NS_PER_DAY);
+        testing_env!(b.build());
+        let _ = c.think(0, "are you there?".to_string());
+    }
+
+    #[test]
+    fn the_contract_account_can_retune_the_idle_rate() {
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        let mut c = Contract::default();
+        c.set_idle_rate(3);
+        assert_eq!(c.params().idle_rate_per_day, 3);
+    }
+
+    #[test]
+    fn live_state_predicts_sleep_below_one_thought() {
+        let mut c = Contract::default();
+        let mut m = make_mind(NearToken::from_yoctonear(crate::state::ONE_NEAR / 400), false, 0); // 0.0025
+        m.last_metabolism_ts = 0;
+        c.minds.insert(0, m);
+        // one per_thought interval later, one autonomous thought (0.002) drains -> eff 0.0005 (< cost)
+        testing_env!(ctx_at("viewer.near", crate::state::NS_PER_DAY / 10).build());
+        assert_eq!(c.live_state(0).as_deref(), Some("asleep")); // view predicts the sleep
+        assert_eq!(c.get_mind(0).unwrap().asleep_since, 0); // not yet persisted
+        c.settle(0); // settle at the same now persists exactly that
+        assert_eq!(c.mind_state(0).as_deref(), Some("asleep"));
+    }
+
+    #[test]
+    fn a_timeout_refund_wake_resets_the_metabolism_clock() {
+        let mut c = Contract::default();
+        let mut m = make_mind(NearToken::from_yoctonear(crate::state::ONE_NEAR / 1000), false, 500); // 0.001, asleep
+        m.last_metabolism_ts = 100; // stale clock from before it slept
+        c.minds.insert(0, m);
+        // a timed-out thought refunds the 0.002 it paid, waking the Mind long after it slept
+        c.finalize_thought(0, Err(()), 7 * crate::state::NS_PER_DAY, economy::THOUGHT_COMPUTE_COST);
+        let after = c.get_mind(0).unwrap();
+        assert_eq!(after.asleep_since, 0); // awake
+        assert_eq!(
+            after.balance,
+            NearToken::from_yoctonear(crate::state::ONE_NEAR / 1000 + economy::THOUGHT_COMPUTE_COST)
+        ); // 0.003
+        assert_eq!(after.last_metabolism_ts, 7 * crate::state::NS_PER_DAY); // reset to now, not 100
+        // a settle at the same instant must NOT back-charge the long sleep gap
+        testing_env!(ctx_at("keeper.near", 7 * crate::state::NS_PER_DAY).build());
+        c.settle(0);
+        assert_eq!(
+            c.get_mind(0).unwrap().balance,
+            NearToken::from_yoctonear(crate::state::ONE_NEAR / 1000 + economy::THOUGHT_COMPUTE_COST)
+        ); // unchanged — no retroactive charge
     }
 
     // --- the no-withdraw invariant ---

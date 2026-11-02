@@ -42,6 +42,32 @@ pub fn hunger_state(balance_yocto: u128) -> HungerState {
 /// Nanoseconds in one day.
 pub const NS_PER_DAY: u64 = 86_400 * 1_000_000_000;
 
+/// Default autonomous-metabolism rate: a neglected Mind burns this many thoughts' worth of
+/// food per day from the passage of time alone. 10/day at the default 0.002 thought cost
+/// means a 0.2 NEAR Mind (100 thoughts) survives ~10 untouched days — the "Пил" calibration.
+/// Governable (seeds `Contract::idle_rate_per_day`).
+pub const DEFAULT_IDLE_RATE: u64 = 10;
+
+/// Ceiling on the governable idle rate, so a mis-set admin key cannot make Minds starve
+/// absurdly fast.
+pub const MAX_IDLE_RATE: u64 = 1_000;
+
+/// Autonomous metabolism: how many WHOLE idle thoughts fall in `elapsed_ns` at `rate_per_day`,
+/// and the ns those consume. The caller advances its metabolism clock by exactly the consumed
+/// ns, so the sub-interval remainder carries to next time instead of being silently lost (no
+/// drift). A rate of 0 freezes metabolism (returns nothing).
+pub fn idle_thoughts(elapsed_ns: u64, rate_per_day: u64) -> (u64, u64) {
+    if rate_per_day == 0 {
+        return (0, 0);
+    }
+    let per_thought = NS_PER_DAY / rate_per_day; // ns between autonomous thoughts
+    if per_thought == 0 {
+        return (0, 0);
+    }
+    let n = elapsed_ns / per_thought;
+    (n, n * per_thought) // n*per_thought <= elapsed_ns, so no overflow
+}
+
 /// How long a Mind must stay asleep before anyone may `reap` it into a ghost.
 /// 30 days in production; a short window on the testnet demo build so judges
 /// see the whole arc in minutes (`cargo near build --features demo-window`).
@@ -80,6 +106,26 @@ mod tests {
     #[test]
     fn zero_balance_is_asleep() {
         assert_eq!(hunger_state(0), HungerState::Asleep);
+    }
+
+    #[test]
+    fn idle_rate_ten_burns_ten_thoughts_a_day() {
+        let (n, consumed) = idle_thoughts(NS_PER_DAY, 10);
+        assert_eq!(n, 10);
+        assert_eq!(consumed, NS_PER_DAY); // a whole day divides evenly at rate 10
+    }
+
+    #[test]
+    fn idle_carries_the_sub_interval_remainder() {
+        let per = NS_PER_DAY / 10;
+        let (n, consumed) = idle_thoughts(per + per / 2, 10); // 1.5 intervals
+        assert_eq!(n, 1); // only whole thoughts count
+        assert_eq!(consumed, per); // the half-interval remainder is NOT consumed
+    }
+
+    #[test]
+    fn idle_rate_zero_never_drains() {
+        assert_eq!(idle_thoughts(NS_PER_DAY * 999, 0), (0, 0));
     }
 
     #[test]
