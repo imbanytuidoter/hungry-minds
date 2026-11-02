@@ -20,6 +20,7 @@ use near_sdk::{
     env, ext_contract, near, AccountId, Gas, GasWeight, NearToken, Promise, PromiseError,
     PromiseOrValue, YieldId,
 };
+use std::collections::{BTreeMap, HashMap};
 
 /// Gas reserved for the thinking callback when the reply (or timeout) comes back.
 const GAS_FOR_THINK_CALLBACK: Gas = Gas::from_tgas(10);
@@ -44,6 +45,21 @@ trait NftReceiver {
 
 const GAS_FOR_NFT_ON_TRANSFER: Gas = Gas::from_tgas(30);
 const GAS_FOR_RESOLVE_TRANSFER: Gas = Gas::from_tgas(10);
+const GAS_FOR_NFT_APPROVE: Gas = Gas::from_tgas(10);
+
+/// The receiver interface for `nft_approve` with a `msg` (NEP-178): the approved contract
+/// (e.g. a marketplace) is notified so it can list the Mind.
+#[allow(dead_code)] // the #[ext_contract] macro consumes this to generate ext_nft_approval_receiver
+#[ext_contract(ext_nft_approval_receiver)]
+trait NftApprovalReceiver {
+    fn nft_on_approve(
+        &mut self,
+        token_id: String,
+        owner_id: AccountId,
+        approval_id: u64,
+        msg: String,
+    );
+}
 
 /// Decide, from the receiver's `nft_on_transfer` outcome, whether to revert the transfer.
 /// A successful call returning `true` — or any failure — means "return the token".
@@ -75,6 +91,11 @@ pub struct Mind {
     /// The Mind's most recent delivered thought (empty until it has thought once).
     pub last_reply: String,
     pub last_reply_ts: u64,
+    /// NEP-178 approvals: who may transfer this Mind on the owner's behalf, each with its
+    /// approval_id. Cleared on every transfer. BTreeMap for deterministic borsh.
+    pub approvals: BTreeMap<AccountId, u64>,
+    /// Next approval_id to hand out for this Mind (monotonic; starts at 1).
+    pub next_approval_id: u64,
 }
 
 impl Mind {
@@ -211,7 +232,13 @@ impl Contract {
             token_id: id.to_string(),
             owner_id: mind.owner.clone(),
             metadata: Some(metadata),
-            approved_account_ids: None,
+            // NEP-178: surface current approvals (empty map signals the extension is supported).
+            approved_account_ids: Some(
+                mind.approvals
+                    .iter()
+                    .map(|(a, id)| (a.clone(), *id))
+                    .collect::<HashMap<AccountId, u64>>(),
+            ),
         }
     }
 
@@ -277,39 +304,63 @@ impl Contract {
     }
 
     /// Settle the departing owner's unclaimed cut and move the token to `receiver_id`.
-    /// Shared by nft_transfer and nft_transfer_call. Returns the previous owner.
+    /// Shared by nft_transfer and nft_transfer_call. The caller may be the owner, or an
+    /// account the owner approved (NEP-178) — then `approval_id`, if given, must match.
+    /// Approvals are cleared on every transfer and returned to the caller, which then either
+    /// refunds their storage to the old owner (a final transfer) or restores them (a reverted
+    /// transfer_call). Returns the previous owner and the approvals that were cleared.
     fn hand_over(
         &mut self,
         id: u64,
         sender: &AccountId,
         receiver_id: &AccountId,
+        approval_id: Option<u64>,
         memo: &Option<String>,
-    ) -> AccountId {
-        let old_owner = {
+    ) -> (AccountId, BTreeMap<AccountId, u64>) {
+        let (old_owner, by_approved) = {
             let mind = self.minds.get(&id).expect("no such Mind");
-            assert_eq!(*sender, mind.owner, "only the token owner can transfer it");
+            let by_owner = *sender == mind.owner;
+            if !by_owner {
+                // NEP-178: an approved account may transfer on the owner's behalf.
+                match mind.approvals.get(sender) {
+                    None => env::panic_str("only the token owner or an approved account may transfer it"),
+                    Some(actual) => assert!(
+                        approval_id.is_none() || approval_id.as_ref() == Some(actual),
+                        "approval_id does not match"
+                    ),
+                }
+            }
             assert!(*receiver_id != mind.owner, "cannot transfer a Mind to its current owner");
-            mind.owner.clone()
+            (mind.owner.clone(), !by_owner)
         };
         // Settle the departing owner's unclaimed guest-chat cut so the buyer never inherits it.
+        // (It always goes to the seller/old owner, even when a marketplace moves the token.)
         let cut = self.take_owner_earnings(id);
         if cut.as_yoctonear() > 0 {
             let _ = near_sdk::Promise::new(old_owner.clone()).transfer(cut);
         }
         // Hand over the token. The Mind's balance, traits and life-so-far (born time,
         // thought count) are keyed to the token id, so they travel with it untouched.
-        self.minds.get_mut(&id).unwrap().owner = receiver_id.clone();
+        // The new owner starts with a clean approval slate; the cleared approvals are
+        // returned so the caller can refund their storage (final transfer) or restore them
+        // (reverted transfer_call).
+        let cleared = {
+            let mind = self.minds.get_mut(&id).unwrap();
+            mind.owner = receiver_id.clone();
+            std::mem::take(&mut mind.approvals)
+        };
 
         let tid = id.to_string();
+        let authorized = if by_approved { Some(sender.as_ref()) } else { None };
         near_contract_standards::non_fungible_token::events::NftTransfer {
             old_owner_id: old_owner.as_ref(),
             new_owner_id: receiver_id.as_ref(),
             token_ids: &[tid.as_str()],
-            authorized_id: None,
+            authorized_id: authorized,
             memo: memo.as_deref(),
         }
         .emit();
-        old_owner
+        (old_owner, cleared)
     }
 }
 
@@ -476,6 +527,8 @@ impl Contract {
                 owner_unclaimed: NearToken::from_yoctonear(0),
                 last_reply: String::new(),
                 last_reply_ts: 0,
+                approvals: BTreeMap::new(),
+                next_approval_id: 1,
             },
         );
         self.next_id += 1;
@@ -650,10 +703,11 @@ impl Contract {
         memo: Option<String>,
     ) {
         near_sdk::assert_one_yocto();
-        let _ = approval_id; // approvals (NEP-178 / marketplaces) are a STRETCH, not yet honoured
         let id: u64 = token_id.parse().expect("token_id must be a number");
         let sender = env::predecessor_account_id();
-        self.hand_over(id, &sender, &receiver_id, &memo);
+        // A direct transfer is final: refund the cleared approvals' storage to the old owner.
+        let (old_owner, cleared) = self.hand_over(id, &sender, &receiver_id, approval_id, &memo);
+        refund_cleared_approvals(&cleared, &old_owner);
     }
 
     /// NEP-171 transfer-and-call: move the token, then invoke `nft_on_transfer` on the
@@ -669,10 +723,9 @@ impl Contract {
         msg: String,
     ) -> PromiseOrValue<bool> {
         near_sdk::assert_one_yocto();
-        let _ = approval_id;
         let id: u64 = token_id.parse().expect("token_id must be a number");
         let sender = env::predecessor_account_id();
-        let old_owner = self.hand_over(id, &sender, &receiver_id, &memo);
+        let (old_owner, cleared) = self.hand_over(id, &sender, &receiver_id, approval_id, &memo);
 
         ext_nft_receiver::ext(receiver_id.clone())
             .with_static_gas(GAS_FOR_NFT_ON_TRANSFER)
@@ -680,7 +733,7 @@ impl Contract {
             .then(
                 Self::ext(env::current_account_id())
                     .with_static_gas(GAS_FOR_RESOLVE_TRANSFER)
-                    .nft_resolve_transfer(old_owner, receiver_id, token_id),
+                    .nft_resolve_transfer(old_owner, receiver_id, token_id, cleared),
             )
             .into()
     }
@@ -693,6 +746,7 @@ impl Contract {
         previous_owner_id: AccountId,
         receiver_id: AccountId,
         token_id: String,
+        cleared_approvals: BTreeMap<AccountId, u64>,
     ) -> bool {
         // A bool is a few bytes; cap the read. Ok -> parse the receiver's answer,
         // Err (failed or oversized) -> treat as "return the token".
@@ -701,13 +755,18 @@ impl Contract {
             Err(_) => Err(()),
         };
         if !should_revert(outcome) {
-            return true; // the receiver kept it; the transfer stands
+            // The transfer stands: the old approvals are gone for good, so refund the storage
+            // the previous owner staked for them.
+            refund_cleared_approvals(&cleared_approvals, &previous_owner_id);
+            return true;
         }
-        // Revert ownership to the previous owner, but only if the receiver still holds it.
+        // Revert ownership to the previous owner, but only if the receiver still holds it. The
+        // approvals hand_over cleared are restored too, so a bounced transfer is a true no-op.
         if let Ok(id) = token_id.parse::<u64>() {
             if let Some(mind) = self.minds.get_mut(&id) {
                 if mind.owner == receiver_id {
                     mind.owner = previous_owner_id.clone();
+                    mind.approvals = cleared_approvals;
                     let tid = id.to_string();
                     near_contract_standards::non_fungible_token::events::NftTransfer {
                         old_owner_id: receiver_id.as_ref(),
@@ -721,6 +780,131 @@ impl Contract {
             }
         }
         false
+    }
+
+    // --- NEP-178: approval management (marketplace support) ---
+
+    /// Approve `account_id` to transfer this Mind on the owner's behalf. Payable: the owner
+    /// covers the storage of a new approval; any excess deposit is refunded. With `msg`, the
+    /// approved contract's `nft_on_approve` is called — how a marketplace gets told to list it.
+    #[payable]
+    pub fn nft_approve(
+        &mut self,
+        token_id: String,
+        account_id: AccountId,
+        msg: Option<String>,
+    ) -> Option<Promise> {
+        assert!(
+            env::attached_deposit() >= NearToken::from_yoctonear(1),
+            "approving needs a deposit (>= 1 yoctoNEAR) to cover approval storage"
+        );
+        let id: u64 = token_id.parse().expect("token_id must be a number");
+        let (owner, approval_id, is_new) = {
+            let mind = self.minds.get_mut(&id).expect("no such Mind");
+            assert_eq!(env::predecessor_account_id(), mind.owner, "only the owner can approve");
+            let approval_id = mind.next_approval_id;
+            let is_new = mind.approvals.insert(account_id.clone(), approval_id).is_none();
+            mind.next_approval_id += 1;
+            (mind.owner.clone(), approval_id, is_new)
+        };
+        // Only a brand-new approval consumes storage; re-approving an account doesn't.
+        let storage_used = if is_new { bytes_for_approval(&account_id) } else { 0 };
+        refund_approval_deposit(storage_used);
+
+        msg.map(|msg| {
+            ext_nft_approval_receiver::ext(account_id)
+                .with_static_gas(env::prepaid_gas().saturating_sub(GAS_FOR_NFT_APPROVE))
+                .nft_on_approve(token_id, owner, approval_id, msg)
+        })
+    }
+
+    /// Revoke one account's approval (owner only); refunds the freed storage to the owner.
+    #[payable]
+    pub fn nft_revoke(&mut self, token_id: String, account_id: AccountId) {
+        near_sdk::assert_one_yocto();
+        let id: u64 = token_id.parse().expect("token_id must be a number");
+        let removed = {
+            let mind = self.minds.get_mut(&id).expect("no such Mind");
+            assert_eq!(env::predecessor_account_id(), mind.owner, "only the owner can revoke");
+            mind.approvals.remove(&account_id).is_some()
+        };
+        if removed {
+            refund_approval_storage(bytes_for_approval(&account_id), env::predecessor_account_id());
+        }
+    }
+
+    /// Revoke every approval on this Mind (owner only); refunds the freed storage.
+    #[payable]
+    pub fn nft_revoke_all(&mut self, token_id: String) {
+        near_sdk::assert_one_yocto();
+        let id: u64 = token_id.parse().expect("token_id must be a number");
+        let freed: u64 = {
+            let mind = self.minds.get_mut(&id).expect("no such Mind");
+            assert_eq!(env::predecessor_account_id(), mind.owner, "only the owner can revoke");
+            let sum = mind.approvals.keys().map(bytes_for_approval).sum();
+            mind.approvals.clear();
+            sum
+        };
+        if freed > 0 {
+            refund_approval_storage(freed, env::predecessor_account_id());
+        }
+    }
+
+    /// Is `approved_account_id` approved for this Mind (optionally with a specific
+    /// `approval_id`)? NEP-178 view — returns false for an unknown token.
+    pub fn nft_is_approved(
+        &self,
+        token_id: String,
+        approved_account_id: AccountId,
+        approval_id: Option<u64>,
+    ) -> bool {
+        let id: u64 = match token_id.parse() {
+            Ok(i) => i,
+            Err(_) => return false,
+        };
+        match self.minds.get(&id) {
+            Some(mind) => match mind.approvals.get(&approved_account_id) {
+                Some(actual) => approval_id.map_or(true, |given| given == *actual),
+                None => false,
+            },
+            None => false,
+        }
+    }
+}
+
+/// Approval storage size, mirrored from near-contract-standards: the account-id string, its
+/// 4-byte borsh length prefix, and the 8-byte u64 approval_id.
+fn bytes_for_approval(account_id: &AccountId) -> u64 {
+    account_id.as_str().len() as u64 + 4 + 8
+}
+
+/// Require the attached deposit to cover `storage_used` bytes, and refund the excess to the
+/// predecessor (NEP-178 `nft_approve`). near_sdk `store` maps flush lazily, so storage is
+/// charged from a computed size rather than an `env::storage_usage()` delta.
+fn refund_approval_deposit(storage_used: u64) {
+    let cost = env::storage_byte_cost().saturating_mul(storage_used as u128);
+    let attached = env::attached_deposit();
+    assert!(attached >= cost, "attach enough deposit to cover approval storage");
+    let refund = attached.saturating_sub(cost);
+    if refund.as_yoctonear() > 1 {
+        let _ = Promise::new(env::predecessor_account_id()).transfer(refund);
+    }
+}
+
+/// Refund the NEAR staked for `bytes` of approval storage to `account` (on revoke).
+fn refund_approval_storage(bytes: u64, account: AccountId) {
+    let amount = env::storage_byte_cost().saturating_mul(bytes as u128);
+    if amount.as_yoctonear() > 0 {
+        let _ = Promise::new(account).transfer(amount);
+    }
+}
+
+/// Refund the storage of a set of approvals cleared by a transfer, back to `to` (the old
+/// owner). Keeps the approve/transfer storage accounting symmetric with revoke.
+fn refund_cleared_approvals(approvals: &BTreeMap<AccountId, u64>, to: &AccountId) {
+    let bytes: u64 = approvals.keys().map(bytes_for_approval).sum();
+    if bytes > 0 {
+        refund_approval_storage(bytes, to.clone());
     }
 }
 
@@ -760,6 +944,8 @@ mod tests {
             owner_unclaimed: NearToken::from_yoctonear(0),
             last_reply: String::new(),
             last_reply_ts: 0,
+            approvals: BTreeMap::new(),
+            next_approval_id: 1,
         }
     }
 
@@ -1222,5 +1408,132 @@ mod tests {
         );
         // Ownership moves synchronously; nft_resolve_transfer may revert it later.
         assert_eq!(c.get_mind(0).unwrap().owner, "market.near".parse::<AccountId>().unwrap());
+    }
+
+    // --- NEP-178: approval management ---
+
+    /// Hatch token 0 owned by alice and return the contract. Leaves env as alice.
+    fn hatched() -> Contract {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string());
+        c
+    }
+
+    #[test]
+    fn approve_lets_an_approved_account_transfer() {
+        let mut c = hatched();
+        // alice approves a marketplace (deposit covers storage; excess refunded)
+        testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build());
+        let ret = c.nft_approve("0".to_string(), "market.near".parse().unwrap(), None);
+        assert!(ret.is_none(), "no msg -> no nft_on_approve promise");
+        assert!(c.nft_is_approved("0".to_string(), "market.near".parse().unwrap(), None));
+
+        // the market moves the token on alice's behalf
+        testing_env!(ctx_from("market.near", NearToken::from_yoctonear(1)).build());
+        c.nft_transfer("carol.near".parse().unwrap(), "0".to_string(), None, None);
+        assert_eq!(c.get_mind(0).unwrap().owner, "carol.near".parse::<AccountId>().unwrap());
+    }
+
+    #[test]
+    fn approvals_get_incrementing_ids_checked_by_is_approved() {
+        let mut c = hatched();
+        testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build());
+        c.nft_approve("0".to_string(), "a.near".parse().unwrap(), None);
+        c.nft_approve("0".to_string(), "b.near".parse().unwrap(), None);
+
+        assert!(c.nft_is_approved("0".to_string(), "a.near".parse().unwrap(), Some(1)));
+        assert!(c.nft_is_approved("0".to_string(), "b.near".parse().unwrap(), Some(2)));
+        assert!(!c.nft_is_approved("0".to_string(), "a.near".parse().unwrap(), Some(2)));
+        assert!(c.nft_is_approved("0".to_string(), "a.near".parse().unwrap(), None));
+        assert!(!c.nft_is_approved("0".to_string(), "nobody.near".parse().unwrap(), None));
+        assert!(!c.nft_is_approved("99".to_string(), "a.near".parse().unwrap(), None));
+    }
+
+    #[test]
+    fn reapproving_updates_the_id() {
+        let mut c = hatched();
+        testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build());
+        c.nft_approve("0".to_string(), "a.near".parse().unwrap(), None); // id 1
+        c.nft_approve("0".to_string(), "a.near".parse().unwrap(), None); // id 2
+        assert!(!c.nft_is_approved("0".to_string(), "a.near".parse().unwrap(), Some(1)));
+        assert!(c.nft_is_approved("0".to_string(), "a.near".parse().unwrap(), Some(2)));
+    }
+
+    #[test]
+    #[should_panic(expected = "only the owner")]
+    fn non_owner_cannot_approve() {
+        let mut c = hatched();
+        testing_env!(ctx_from("mallory.near", NearToken::from_millinear(10)).build());
+        c.nft_approve("0".to_string(), "mallory.near".parse().unwrap(), None);
+    }
+
+    #[test]
+    fn revoke_removes_one_approval() {
+        let mut c = hatched();
+        testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build());
+        c.nft_approve("0".to_string(), "a.near".parse().unwrap(), None);
+        c.nft_approve("0".to_string(), "b.near".parse().unwrap(), None);
+
+        testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(1)).build());
+        c.nft_revoke("0".to_string(), "a.near".parse().unwrap());
+        assert!(!c.nft_is_approved("0".to_string(), "a.near".parse().unwrap(), None));
+        assert!(c.nft_is_approved("0".to_string(), "b.near".parse().unwrap(), None));
+    }
+
+    #[test]
+    fn revoke_all_clears_every_approval() {
+        let mut c = hatched();
+        testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build());
+        c.nft_approve("0".to_string(), "a.near".parse().unwrap(), None);
+        c.nft_approve("0".to_string(), "b.near".parse().unwrap(), None);
+
+        testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(1)).build());
+        c.nft_revoke_all("0".to_string());
+        assert!(!c.nft_is_approved("0".to_string(), "a.near".parse().unwrap(), None));
+        assert!(!c.nft_is_approved("0".to_string(), "b.near".parse().unwrap(), None));
+        // the token view reports an empty approval set
+        assert!(c.nft_token("0".to_string()).unwrap().approved_account_ids.unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_transfer_clears_approvals() {
+        let mut c = hatched();
+        testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build());
+        c.nft_approve("0".to_string(), "market.near".parse().unwrap(), None);
+
+        testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(1)).build());
+        c.nft_transfer("carol.near".parse().unwrap(), "0".to_string(), None, None);
+        // the old approval does not carry to the new owner
+        assert!(!c.nft_is_approved("0".to_string(), "market.near".parse().unwrap(), None));
+    }
+
+    #[test]
+    #[should_panic(expected = "approval_id does not match")]
+    fn a_stale_approval_id_is_rejected() {
+        let mut c = hatched();
+        testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build());
+        c.nft_approve("0".to_string(), "market.near".parse().unwrap(), None); // id 1
+
+        testing_env!(ctx_from("market.near", NearToken::from_yoctonear(1)).build());
+        c.nft_transfer("carol.near".parse().unwrap(), "0".to_string(), Some(999), None);
+    }
+
+    #[test]
+    fn nft_token_surfaces_approvals() {
+        let mut c = hatched();
+        testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build());
+        c.nft_approve("0".to_string(), "market.near".parse().unwrap(), None);
+        let ids = c.nft_token("0".to_string()).unwrap().approved_account_ids.unwrap();
+        assert_eq!(ids.get(&"market.near".parse::<AccountId>().unwrap()), Some(&1));
+    }
+
+    #[test]
+    #[should_panic(expected = "deposit")]
+    fn approve_without_enough_deposit_is_rejected() {
+        let mut c = hatched();
+        // 1 yocto is far below the storage cost of a new approval
+        testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(1)).build());
+        c.nft_approve("0".to_string(), "market.near".parse().unwrap(), None);
     }
 }

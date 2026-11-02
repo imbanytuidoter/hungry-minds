@@ -98,6 +98,16 @@ export const nftTokensForOwner = (account_id: string, limit = 50) =>
   viewContract<unknown[]>("nft_tokens_for_owner", { account_id, limit });
 export const nftTokens = (from = 0, limit = 50) =>
   viewContract<unknown[]>("nft_tokens", { from_index: String(from), limit });
+export const nftIsApproved = (
+  id: number,
+  approved_account_id: string,
+  approval_id?: number
+) =>
+  viewContract<boolean>("nft_is_approved", {
+    token_id: String(id),
+    approved_account_id,
+    approval_id: approval_id ?? null,
+  });
 
 // ── Writes (need a signer) ─────────────────────────────────────────────────
 
@@ -138,6 +148,25 @@ export const claimEarnings = (s: Signer, id: number) =>
 export const reap = (s: Signer, id: number) => callContract(s, "reap", { id });
 export const nftTransfer = (s: Signer, id: number, receiver_id: string) =>
   callContract(s, "nft_transfer", { receiver_id, token_id: String(id) }, ONE_YOCTO);
+// NEP-178: let a marketplace transfer the Mind on the owner's behalf. `near` covers the
+// approval's storage (excess refunded); `msg` notifies the approved contract if given.
+export const nftApprove = (
+  s: Signer,
+  id: number,
+  account_id: string,
+  msg?: string,
+  near = 0.01
+) =>
+  callContract(
+    s,
+    "nft_approve",
+    { token_id: String(id), account_id, msg: msg ?? null },
+    nearToYocto(near)
+  );
+export const nftRevoke = (s: Signer, id: number, account_id: string) =>
+  callContract(s, "nft_revoke", { token_id: String(id), account_id }, ONE_YOCTO);
+export const nftRevokeAll = (s: Signer, id: number) =>
+  callContract(s, "nft_revoke_all", { token_id: String(id) }, ONE_YOCTO);
 
 function toBase64(s: string): string {
   if (typeof btoa === "function") return btoa(s);

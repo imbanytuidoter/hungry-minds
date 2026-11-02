@@ -148,7 +148,7 @@ Pett.ai та інші AI-пети — у нас гроші невідʼємні 
 
 ## 9. Технологічний стек
 
-- **Контракт:** Rust, `near-sdk 5.29.1`, NEP-171/177/181; збирається у wasm; 58 unit-тестів (TDD)
+- **Контракт:** Rust, `near-sdk 5.29.1`, NEP-171/177/181/178; збирається у wasm; 69 unit-тестів (TDD)
   + sandbox-інтеграційні тести (near-workspaces).
 - **Арт:** процедурний on-chain SVG (модуль `art.rs`), `svg_for` + `nft_token` (base64 data-URI
   у `media`).
@@ -170,12 +170,14 @@ Pett.ai та інші AI-пети — у нас гроші невідʼємні 
 
 ## 11. Поточний стан (чесно)
 
-**Зроблено й перевірено (58 unit-тестів + sandbox-інтеграційний набір, wasm збирається):**
+**Зроблено й перевірено (69 unit-тестів + sandbox-інтеграційний набір, wasm збирається):**
 - Повний цикл життя + економіка з інваріантом «власник не виводить баланс Mind».
 - On-chain SVG-арт (обʼємні милі істоти, 8 палітр, стан→обличчя); `svg_for` (framed) +
   `svg_for_bare` (прозорий, для веб-віваріуму).
 - NEP-171/177/181: `nft_metadata` / `nft_token` (live-SVG) / enumeration /
   `nft_transfer` + `nft_transfer_call` зі стандартними подіями.
+- NEP-178 approval management: `nft_approve` / `nft_revoke` / `nft_revoke_all` /
+  `nft_is_approved` — маркетплейс може листити й передавати Mind (approvals чистяться при трансфері).
 - **Мозок (yield/resume):** `think`/`chat` паркують yielded-promise; off-chain-воркер
   (`worker/`) кличе NEAR AI й резюмує через `respond`; `on_thought` зберігає/рефандить.
 - **Веб підключено до ланцюга:** `lib/chain.ts` (RPC-views + wallet-записи) та `lib/live.ts`

@@ -194,6 +194,35 @@ test("the whole game loop, on a real sandbox", async (t) => {
       assert.equal(mine.length, 1);
       assert.equal(mine[0].token_id, "0");
     });
+
+    await t.test("NEP-178: an approved marketplace transfers, then approvals clear", async () => {
+      const market = await root.createSubAccount("market", { initialBalance: ONE_NEAR * 5n });
+      // bob (current owner) approves the market; the deposit covers storage, excess refunds
+      await bob.call(
+        contract,
+        "nft_approve",
+        { token_id: "0", account_id: market.accountId },
+        { attachedDeposit: ONE_NEAR / 100n, gas: T300 }
+      );
+      assert.equal(
+        await contract.view("nft_is_approved", { token_id: "0", approved_account_id: market.accountId }),
+        true
+      );
+
+      // the market moves it to alice on bob's behalf
+      await market.call(
+        contract,
+        "nft_transfer",
+        { receiver_id: alice.accountId, token_id: "0" },
+        { attachedDeposit: 1n, gas: T300 }
+      );
+      assert.equal((await contract.view("get_mind", { id: 0 })).owner, alice.accountId);
+      // the approval did not survive the transfer
+      assert.equal(
+        await contract.view("nft_is_approved", { token_id: "0", approved_account_id: market.accountId }),
+        false
+      );
+    });
   } finally {
     await worker.tearDown();
   }
