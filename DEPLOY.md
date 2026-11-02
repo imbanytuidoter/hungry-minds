@@ -65,14 +65,29 @@ npm install && npm start
 
 ```bash
 # owner thinks: parks a thought, worker answers, reply lands on-chain
-near call hungry-minds.$ACC think '{"id":0,"prompt":"who are you?"}' --accountId $ACC --gas 100000000000000
+# (300 Tgas — think/chat park a yield and schedule the on_thought callback)
+near call hungry-minds.$ACC think '{"id":0,"prompt":"who are you?"}' --accountId $ACC --gas 300000000000000
 near view hungry-minds.$ACC last_thought '{"id":0}'    # -> Juno's reply
 
 # a stranger pays 0.01 to chat (70% feeds Juno, 20% to the owner, 10% treasury)
-near call hungry-minds.$ACC chat '{"id":1,"prompt":"hello"}' --accountId someone.testnet --deposit 0.01 --gas 100000000000000
+near call hungry-minds.$ACC chat '{"id":1,"prompt":"hello"}' --accountId someone.testnet --deposit 0.01 --gas 300000000000000
 
 # feed, claim, drain-to-asleep, reap (demo-window build), sell — see README walkthrough
 ```
 
 The worker account never touches a Mind's balance; it only calls `respond` and pays gas.
 Keep the worker's and NEAR AI keys out of git (worker/.gitignore covers `.env`).
+
+## 7. Point the web at it (goes live, no code change)
+
+```bash
+cd web
+cp .env.example .env.local
+#   NEXT_PUBLIC_CONTRACT_ID=hungry-minds.$ACC
+npm install && npm run build && npm start
+```
+
+With `NEXT_PUBLIC_CONTRACT_ID` set, the gallery and Mind pages read the chain over RPC and the
+Connect-wallet button + hatch/feed/talk sign real transactions through NEAR Wallet Selector.
+Leave it empty and the site stays in preview (sample Minds) — judges can clone and see the art
+with no deploy, then set the var to go live.
