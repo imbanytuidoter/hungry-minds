@@ -25,6 +25,9 @@ use near_sdk::{
 const GAS_FOR_THINK_CALLBACK: Gas = Gas::from_tgas(10);
 /// Longest prompt a Mind will accept — bounds request storage and abuse.
 const MAX_PROMPT_LEN: usize = 500;
+/// Longest reply stored on a Mind. `respond` is permissionless (the pull model lets any
+/// worker resume a thought), so a stored reply is capped to bound storage-griefing.
+const MAX_REPLY_LEN: usize = 1000;
 
 /// The receiver interface for `nft_transfer_call` (NEP-171 core).
 #[allow(dead_code)] // the #[ext_contract] macro consumes this to generate ext_nft_receiver
@@ -249,7 +252,13 @@ impl Contract {
         };
         match outcome {
             Ok(reply) => {
-                mind.last_reply = reply;
+                // Cap the stored reply (char-safe) — respond is permissionless, so this
+                // bounds storage griefing from an over-long payload.
+                mind.last_reply = if reply.chars().count() > MAX_REPLY_LEN {
+                    reply.chars().take(MAX_REPLY_LEN).collect()
+                } else {
+                    reply
+                };
                 mind.last_reply_ts = now;
             }
             Err(()) => {
@@ -961,6 +970,17 @@ mod tests {
         c.finalize_thought(0, Ok("I think, therefore I bill.".to_string()), 123);
         assert_eq!(c.last_thought(0).as_deref(), Some("I think, therefore I bill."));
         assert_eq!(c.get_mind(0).unwrap().last_reply_ts, 123);
+    }
+
+    #[test]
+    fn an_overlong_reply_is_capped_to_bound_storage() {
+        let mut c = Contract::default();
+        c.minds.insert(0, make_mind(NearToken::from_near(1), false, 0));
+        // respond is permissionless, so a griefer could try to store a huge reply.
+        let huge = "é".repeat(5000); // multi-byte, to prove the cap is char-safe (no panic)
+        c.finalize_thought(0, Ok(huge), 1);
+        let stored = c.last_thought(0).unwrap();
+        assert_eq!(stored.chars().count(), MAX_REPLY_LEN);
     }
 
     #[test]

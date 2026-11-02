@@ -91,6 +91,10 @@ jobs:
         with:
           node-version: 20
 
+      - name: Worker unit tests
+        working-directory: worker
+        run: node --test
+
       - name: Run sandbox tests
         working-directory: integration
         run: |

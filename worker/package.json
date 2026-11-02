@@ -6,7 +6,8 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
-    "start": "node --env-file=.env index.js"
+    "start": "node --env-file=.env index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "near-api-js": "^5.0.1"
