@@ -103,11 +103,10 @@ impl Mind {
     /// A Mind that is a ghost, already asleep, or too poor to afford a reply
     /// cannot think; the moment it can no longer afford one it falls asleep
     /// (recording `now`, which starts the ghost clock).
-    pub fn spend_one_thought(&mut self, now: u64) -> bool {
+    pub fn spend_one_thought(&mut self, now: u64, cost: u128) -> bool {
         if self.ghost || self.asleep_since != 0 {
             return false;
         }
-        let cost = economy::THOUGHT_COMPUTE_COST;
         if self.balance.as_yoctonear() < cost {
             self.asleep_since = now;
             return false;
@@ -147,6 +146,9 @@ pub struct Pending {
     pub prompt: String,
     pub by_owner: bool,
     pub yield_id: YieldId,
+    /// The thought cost locked in at spend time, so a timeout refunds exactly what the
+    /// Mind paid even if the governable `thought_cost` was retuned while this was in flight.
+    pub cost_paid: u128,
 }
 
 /// A pending thought as the off-chain worker sees it (JSON view).
@@ -168,6 +170,17 @@ pub struct MindRank {
     pub state: String,
 }
 
+/// The live, governable economy prices (JSON view) so the web app and off-chain worker read
+/// the current numbers from chain instead of hardcoding them. `NearToken` serializes as a
+/// yoctoNEAR string.
+#[near(serializers = [json])]
+pub struct EconomyParams {
+    pub thought_cost: NearToken,
+    pub guest_min_price: NearToken,
+    pub revive_price: NearToken,
+    pub mint_price: NearToken,
+}
+
 #[near(contract_state)]
 pub struct Contract {
     next_id: u64,
@@ -176,6 +189,14 @@ pub struct Contract {
     /// Thoughts awaiting a reply, keyed by request id (the off-chain worker polls these).
     next_request: u64,
     pending: IterableMap<u64, Pending>,
+    /// Governable economy prices (yoctoNEAR), seeded from `economy::*` defaults. Only the
+    /// contract account itself (`predecessor == current_account_id`) may retune them via the
+    /// `set_*` methods — the key that controls the contract account is the admin, so there is
+    /// no separate owner field to initialize. Flag #1: `thought_cost` must track real
+    /// inference price, so it lives here, not frozen in code.
+    thought_cost: u128,
+    guest_min_price: u128,
+    revive_price: u128,
 }
 
 impl Default for Contract {
@@ -186,6 +207,9 @@ impl Default for Contract {
             minds: IterableMap::new(b"m"),
             next_request: 0,
             pending: IterableMap::new(b"p"),
+            thought_cost: economy::THOUGHT_COMPUTE_COST,
+            guest_min_price: economy::GUEST_PRICE,
+            revive_price: economy::REVIVE_PRICE,
         }
     }
 }
@@ -195,7 +219,11 @@ impl Default for Contract {
 impl Contract {
     /// Credit a guest's pay-to-chat (70% Mind / 20% owner-unclaimed / 10% treasury)
     /// and spend the one thought the reply will cost.
-    fn credit_guest_payment(&mut self, id: u64, deposit: u128, now: u64) {
+    /// Returns whether the triggered thought was actually charged. The caller MUST NOT park a
+    /// thought when this is false, or a later timeout would refund a cost that was never
+    /// debited (minting NEAR). With the guest-covers-a-thought invariant enforced by the
+    /// governance setters this is always true, but chat asserts it as defence in depth.
+    fn credit_guest_payment(&mut self, id: u64, deposit: u128, now: u64, cost: u128) -> bool {
         let split = economy::guest_split(deposit);
         self.treasury = self
             .treasury
@@ -207,7 +235,7 @@ impl Contract {
         mind.owner_unclaimed = mind
             .owner_unclaimed
             .saturating_add(NearToken::from_yoctonear(split.to_owner));
-        mind.spend_one_thought(now);
+        mind.spend_one_thought(now, cost)
     }
 
     /// Build the NEP-171 `Token` view for a Mind, with live on-chain SVG media.
@@ -264,7 +292,7 @@ impl Contract {
     /// (OutLayer TEE -> NEAR AI) can pick it up and resume it with a reply. Returns the
     /// yielded promise (the caller's transaction pauses here until a reply or the 200-block
     /// timeout). The thought's cost has already been spent by the caller.
-    fn park_thought(&mut self, mind_id: u64, prompt: String, by_owner: bool) -> Promise {
+    fn park_thought(&mut self, mind_id: u64, prompt: String, by_owner: bool, cost_paid: u128) -> Promise {
         let rid = self.next_request;
         self.next_request += 1;
         let args = near_sdk::serde_json::json!({ "mind_id": mind_id, "request_id": rid })
@@ -274,7 +302,7 @@ impl Contract {
             Promise::new_yield("on_thought", args, GAS_FOR_THINK_CALLBACK, GasWeight::default());
         self.pending.insert(
             rid,
-            Pending { mind_id, prompt, by_owner, yield_id },
+            Pending { mind_id, prompt, by_owner, yield_id, cost_paid },
         );
         env::log_str(&format!("thought_parked request={rid} mind={mind_id} by_owner={by_owner}"));
         promise
@@ -282,7 +310,7 @@ impl Contract {
 
     /// Resolve a parked thought: store a delivered reply, or refund a timed-out one. Pure
     /// enough to unit-test directly; the #[private] on_thought callback wraps it.
-    fn finalize_thought(&mut self, mind_id: u64, outcome: Result<String, ()>, now: u64) {
+    fn finalize_thought(&mut self, mind_id: u64, outcome: Result<String, ()>, now: u64, cost: u128) {
         let mind = match self.minds.get_mut(&mind_id) {
             Some(m) => m,
             None => return,
@@ -299,14 +327,13 @@ impl Contract {
                 mind.last_reply_ts = now;
             }
             Err(()) => {
-                // No compute was delivered — refund the thought the Mind paid for, and wake
-                // it if that very payment was what put it to sleep.
+                // No compute was delivered — refund exactly what the Mind paid for this
+                // thought (the cost locked in at spend time), and wake it if that very
+                // payment was what put it to sleep.
                 mind.balance = mind
                     .balance
-                    .saturating_add(NearToken::from_yoctonear(economy::THOUGHT_COMPUTE_COST));
-                if mind.asleep_since != 0
-                    && mind.balance.as_yoctonear() >= economy::THOUGHT_COMPUTE_COST
-                {
+                    .saturating_add(NearToken::from_yoctonear(cost));
+                if mind.asleep_since != 0 && mind.balance.as_yoctonear() >= cost {
                     mind.asleep_since = 0;
                 }
             }
@@ -584,13 +611,46 @@ impl Contract {
     #[payable]
     pub fn feed(&mut self, id: u64) {
         let split = economy::feed_split(env::attached_deposit().as_yoctonear());
+        let cost = self.thought_cost;
         let mind = self.minds.get_mut(&id).expect("no such Mind");
-        assert!(!mind.ghost, "a ghost must be revived, not fed");
+        assert!(!mind.ghost, "a ghost cannot be fed");
         mind.balance = mind
             .balance
             .saturating_add(NearToken::from_yoctonear(split.to_mind));
-        if mind.asleep_since != 0 && mind.balance.as_yoctonear() >= economy::THOUGHT_COMPUTE_COST {
+        if mind.asleep_since != 0 && mind.balance.as_yoctonear() >= cost {
             mind.asleep_since = 0; // woke up
+        }
+        self.treasury = self
+            .treasury
+            .saturating_add(NearToken::from_yoctonear(split.to_treasury));
+    }
+
+    /// Instant paid comeback for an *asleep* Mind: attach >= `revive_price`; the split sends
+    /// the premium share to treasury and the rest into the Mind's locked food, waking it at
+    /// once. This is never the only way back — `feed`ing a little, or letting guests `chat`,
+    /// also wakes a Mind for free (just slower) — so revive is a convenience, not a ransom.
+    /// A ghost (reaped after the long sleep) is a permanent memorial and is NOT revived here;
+    /// whether ghosts should ever return is a deliberate open design question, left out of code.
+    #[payable]
+    pub fn revive(&mut self, id: u64) {
+        let deposit = env::attached_deposit().as_yoctonear();
+        assert!(deposit >= self.revive_price, "revive needs at least the revive price");
+        let cost = self.thought_cost;
+        let split = economy::revive_split(deposit);
+        {
+            let mind = self.minds.get_mut(&id).expect("no such Mind");
+            assert!(!mind.ghost, "a ghost is a memorial and cannot be revived");
+            assert!(mind.asleep_since != 0, "this Mind is awake — no need to revive");
+            mind.balance = mind
+                .balance
+                .saturating_add(NearToken::from_yoctonear(split.to_mind));
+            // Revive must deliver its one promised effect: never take the deposit and leave
+            // the Mind asleep. If the deposit cannot lift it to one thought, revert entirely.
+            assert!(
+                mind.balance.as_yoctonear() >= cost,
+                "revive deposit too small to wake this Mind — attach more"
+            );
+            mind.asleep_since = 0; // guaranteed awake
         }
         self.treasury = self
             .treasury
@@ -602,14 +662,15 @@ impl Contract {
         assert!(prompt.len() <= MAX_PROMPT_LEN, "prompt too long");
         let caller = env::predecessor_account_id();
         let now = env::block_timestamp();
+        let cost = self.thought_cost;
         {
             let mind = self.minds.get_mut(&id).expect("no such Mind");
             assert_eq!(caller, mind.owner, "only the owner can use think()");
             assert!(!mind.ghost, "this Mind is a ghost — revive it first");
             // The Mind pays for the thought up front; a timeout refunds it (finalize_thought).
-            assert!(mind.spend_one_thought(now), "this Mind is asleep — feed it");
+            assert!(mind.spend_one_thought(now, cost), "this Mind is asleep — feed it");
         }
-        self.park_thought(id, prompt, true)
+        self.park_thought(id, prompt, true, cost)
     }
 
     /// A stranger pays to talk to a public Mind (70/20/10) and it thinks a reply.
@@ -619,17 +680,22 @@ impl Contract {
         let caller = env::predecessor_account_id();
         let now = env::block_timestamp();
         let deposit = env::attached_deposit().as_yoctonear();
+        let cost = self.thought_cost;
         // A guest must cover the thought they trigger, or a free-rider could drain the
-        // Mind's food 0.002 at a time for only gas. See economy::GUEST_PRICE.
-        assert!(deposit >= economy::GUEST_PRICE, "chat costs at least 0.01 NEAR");
+        // Mind's food one thought at a time for only gas. See `guest_min_price`.
+        assert!(deposit >= self.guest_min_price, "chat deposit below the guest minimum");
         {
             let mind = self.minds.get(&id).expect("no such Mind");
             assert!(caller != mind.owner, "use think() for your own Mind");
             assert!(!mind.ghost, "this Mind is a ghost");
             assert_eq!(mind.asleep_since, 0, "this Mind is asleep — only the owner can feed it");
         }
-        self.credit_guest_payment(id, deposit, now);
-        self.park_thought(id, prompt, false)
+        let spent = self.credit_guest_payment(id, deposit, now, cost);
+        // Never park a thought that was not actually charged (else a timeout would refund an
+        // undebited cost). Guaranteed true by the guest-covers-a-thought invariant; asserted
+        // so the money logic is self-protecting even if that invariant ever regresses.
+        assert!(spent, "this Mind cannot afford a thought right now");
+        self.park_thought(id, prompt, false, cost)
     }
 
     /// The off-chain worker (OutLayer TEE -> NEAR AI) returns a reply here, resuming the
@@ -651,9 +717,10 @@ impl Contract {
         request_id: u64,
         #[callback_result] reply: Result<String, PromiseError>,
     ) {
-        self.pending.remove(&request_id);
+        let removed = self.pending.remove(&request_id);
+        let cost = removed.map(|p| p.cost_paid).unwrap_or(self.thought_cost);
         let now = env::block_timestamp();
-        self.finalize_thought(mind_id, reply.map_err(|_| ()), now);
+        self.finalize_thought(mind_id, reply.map_err(|_| ()), now, cost);
     }
 
     /// The Mind's most recent delivered thought (empty until it has thought once).
@@ -724,6 +791,75 @@ impl Contract {
         mind.owner_unclaimed = mind
             .owner_unclaimed
             .saturating_add(NearToken::from_yoctonear(economy::MINT_STORAGE_RESERVE));
+    }
+
+    // --- Governance: the contract account retunes the economy's prices -------------------
+    // The admin is the contract account itself: a call whose predecessor is the contract's
+    // own account (the key controlling it). No separate owner field, so nothing to init.
+
+    /// The live economy prices, read from chain by the web app and worker.
+    pub fn params(&self) -> EconomyParams {
+        EconomyParams {
+            thought_cost: NearToken::from_yoctonear(self.thought_cost),
+            guest_min_price: NearToken::from_yoctonear(self.guest_min_price),
+            revive_price: NearToken::from_yoctonear(self.revive_price),
+            mint_price: NearToken::from_yoctonear(economy::MINT_PRICE),
+        }
+    }
+
+    fn assert_admin(&self) {
+        assert_eq!(
+            env::predecessor_account_id(),
+            env::current_account_id(),
+            "only the contract account may change economy parameters"
+        );
+    }
+
+    /// Re-peg the cost of one thought (flag #1). Bounded by `economy::MAX_THOUGHT_COST` so a
+    /// mis-set or hostile admin key cannot make Minds bankrupt themselves in a single thought.
+    pub fn set_thought_cost(&mut self, yocto: U128) {
+        self.assert_admin();
+        let c = yocto.0;
+        assert!(c > 0, "thought cost must be positive");
+        assert!(c <= economy::MAX_THOUGHT_COST, "thought cost above the safety ceiling");
+        // Keep the guest-covers-a-thought invariant: the 70% a minimum guest actually leaves
+        // the Mind must still exceed one thought. Re-pegging the cost up (flag #1) therefore
+        // requires raising the guest minimum first, rather than silently inverting the economy.
+        assert!(
+            economy::guest_split(self.guest_min_price).to_mind > c,
+            "thought cost too high for the guest minimum — raise the guest minimum first"
+        );
+        self.thought_cost = c;
+        env::log_str(&format!("param_set thought_cost={c}"));
+    }
+
+    /// Set the minimum a guest must attach to `chat`. Kept at or above the thought cost so a
+    /// guest always covers the thought they trigger (no free-rider drain).
+    pub fn set_guest_min_price(&mut self, yocto: U128) {
+        self.assert_admin();
+        let p = yocto.0;
+        // The Mind keeps only the 70% guest share, so compare THAT to the thought cost, not
+        // the gross deposit — otherwise a "p >= cost" check still leaves the Mind net-draining.
+        assert!(
+            economy::guest_split(p).to_mind > self.thought_cost,
+            "guest minimum must cover a thought after the 30% owner/treasury split"
+        );
+        self.guest_min_price = p;
+        env::log_str(&format!("param_set guest_min_price={p}"));
+    }
+
+    /// Set the minimum paid-`revive` deposit. The free wake paths (feed / guest chat) are
+    /// unaffected, so this never becomes the only way back.
+    pub fn set_revive_price(&mut self, yocto: U128) {
+        self.assert_admin();
+        let p = yocto.0;
+        // The minimum revive must actually wake a Mind: its 80% share has to reach one thought.
+        assert!(
+            economy::revive_split(p).to_mind >= self.thought_cost,
+            "revive price must be enough to wake a Mind"
+        );
+        self.revive_price = p;
+        env::log_str(&format!("param_set revive_price={p}"));
     }
 
     /// NEP-171 transfer. A Mind is sold whole: its food balance, traits and life-so-far
@@ -1030,7 +1166,7 @@ mod tests {
     #[test]
     fn thought_deducts_cost_and_bumps_count() {
         let mut m = make_mind(NearToken::from_near(1), false, 0);
-        assert!(m.spend_one_thought(100));
+        assert!(m.spend_one_thought(100, economy::THOUGHT_COMPUTE_COST));
         assert_eq!(
             m.balance,
             NearToken::from_yoctonear(crate::state::ONE_NEAR - economy::THOUGHT_COMPUTE_COST)
@@ -1043,7 +1179,7 @@ mod tests {
     #[test]
     fn broke_mind_cannot_think_and_falls_asleep() {
         let mut m = make_mind(NearToken::from_yoctonear(crate::state::ONE_NEAR / 1000), false, 0); // 0.001 < 0.002
-        assert!(!m.spend_one_thought(200));
+        assert!(!m.spend_one_thought(200, economy::THOUGHT_COMPUTE_COST));
         assert_eq!(m.asleep_since, 200);
         assert_eq!(m.thought_count, 0);
     }
@@ -1051,9 +1187,9 @@ mod tests {
     #[test]
     fn asleep_and_ghost_minds_cannot_think() {
         let mut asleep = make_mind(NearToken::from_near(1), false, 50);
-        assert!(!asleep.spend_one_thought(100));
+        assert!(!asleep.spend_one_thought(100, economy::THOUGHT_COMPUTE_COST));
         let mut ghost = make_mind(NearToken::from_near(1), true, 0);
-        assert!(!ghost.spend_one_thought(100));
+        assert!(!ghost.spend_one_thought(100, economy::THOUGHT_COMPUTE_COST));
     }
 
     // --- feed ---
@@ -1130,7 +1266,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "at least 0.01 NEAR")]
+    #[should_panic(expected = "below the guest minimum")]
     fn guest_chat_below_the_price_is_rejected() {
         // A free-rider attaching 0 must not be able to spend the Mind's food.
         testing_env!(ctx_from("alice.near", NearToken::from_near(2)).build());
@@ -1189,7 +1325,7 @@ mod tests {
     fn a_delivered_reply_is_stored_on_the_mind() {
         let mut c = Contract::default();
         c.minds.insert(0, make_mind(NearToken::from_near(1), false, 0));
-        c.finalize_thought(0, Ok("I think, therefore I bill.".to_string()), 123);
+        c.finalize_thought(0, Ok("I think, therefore I bill.".to_string()), 123, economy::THOUGHT_COMPUTE_COST);
         assert_eq!(c.last_thought(0).as_deref(), Some("I think, therefore I bill."));
         assert_eq!(c.get_mind(0).unwrap().last_reply_ts, 123);
     }
@@ -1200,7 +1336,7 @@ mod tests {
         c.minds.insert(0, make_mind(NearToken::from_near(1), false, 0));
         // respond is permissionless, so a griefer could try to store a huge reply.
         let huge = "é".repeat(5000); // multi-byte, to prove the cap is char-safe (no panic)
-        c.finalize_thought(0, Ok(huge), 1);
+        c.finalize_thought(0, Ok(huge), 1, economy::THOUGHT_COMPUTE_COST);
         let stored = c.last_thought(0).unwrap();
         assert_eq!(stored.chars().count(), MAX_REPLY_LEN);
     }
@@ -1213,7 +1349,7 @@ mod tests {
             0,
             make_mind(NearToken::from_yoctonear(crate::state::ONE_NEAR / 1000), false, 500),
         );
-        c.finalize_thought(0, Err(()), 600);
+        c.finalize_thought(0, Err(()), 600, economy::THOUGHT_COMPUTE_COST);
         let after = c.get_mind(0).unwrap();
         // refunded the 0.002 it paid -> 0.003, which is affordable again -> awake
         assert_eq!(
@@ -1221,6 +1357,207 @@ mod tests {
             NearToken::from_yoctonear(crate::state::ONE_NEAR / 1000 + economy::THOUGHT_COMPUTE_COST)
         );
         assert_eq!(after.asleep_since, 0);
+    }
+
+    // --- governable economy params + revive ---
+
+    fn admin_ctx(deposit: NearToken) -> VMContextBuilder {
+        // The admin is the contract account itself: predecessor == current_account_id.
+        let mut b = VMContextBuilder::new();
+        b.current_account_id("hm.near".parse().unwrap())
+            .predecessor_account_id("hm.near".parse().unwrap())
+            .attached_deposit(deposit)
+            .random_seed(seed_all(0));
+        b
+    }
+
+    #[test]
+    fn params_view_reports_current_prices() {
+        let c = Contract::default();
+        let p = c.params();
+        assert_eq!(p.thought_cost, NearToken::from_yoctonear(economy::THOUGHT_COMPUTE_COST));
+        assert_eq!(p.guest_min_price, NearToken::from_yoctonear(economy::GUEST_PRICE));
+        assert_eq!(p.revive_price, NearToken::from_yoctonear(economy::REVIVE_PRICE));
+        assert_eq!(p.mint_price, NearToken::from_yoctonear(economy::MINT_PRICE));
+    }
+
+    #[test]
+    fn contract_account_can_retune_the_thought_cost() {
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        let mut c = Contract::default();
+        let new_cost = crate::state::ONE_NEAR / 250; // 0.004
+        c.set_thought_cost(U128(new_cost));
+        assert_eq!(c.params().thought_cost, NearToken::from_yoctonear(new_cost));
+    }
+
+    #[test]
+    #[should_panic(expected = "only the contract account")]
+    fn a_stranger_cannot_retune_params() {
+        let mut b = VMContextBuilder::new();
+        b.current_account_id("hm.near".parse().unwrap())
+            .predecessor_account_id("mallory.near".parse().unwrap());
+        testing_env!(b.build());
+        let mut c = Contract::default();
+        c.set_thought_cost(U128(1));
+    }
+
+    #[test]
+    #[should_panic(expected = "safety ceiling")]
+    fn thought_cost_cannot_exceed_the_ceiling() {
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        let mut c = Contract::default();
+        c.set_thought_cost(U128(crate::state::ONE_NEAR)); // 1.0 NEAR > MAX 0.1
+    }
+
+    #[test]
+    #[should_panic(expected = "must cover a thought")]
+    fn guest_minimum_must_cover_a_thought() {
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        let mut c = Contract::default();
+        c.set_guest_min_price(U128(1)); // 1 yocto < the 0.002 thought cost
+    }
+
+    #[test]
+    fn a_retuned_thought_cost_is_charged_and_locked_on_the_next_think() {
+        // Hatch under the contract account so it is the owner and may think().
+        testing_env!(admin_ctx(NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Echo".to_string()); // balance 1.0, cost default 0.002
+        let new_cost = crate::state::ONE_NEAR / 250; // 0.004
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        c.set_thought_cost(U128(new_cost));
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        let _ = c.think(0, "hi".to_string());
+        assert_eq!(
+            c.get_mind(0).unwrap().balance,
+            NearToken::from_yoctonear(crate::state::ONE_NEAR - new_cost)
+        );
+        // the in-flight thought locked in the new cost
+        assert_eq!(c.pending.get(&0).unwrap().cost_paid, new_cost);
+    }
+
+    #[test]
+    fn a_refund_returns_the_cost_locked_at_spend_time_not_the_new_one() {
+        testing_env!(admin_ctx(NearToken::from_near(2)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Echo".to_string()); // balance 1.0
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        let _ = c.think(0, "hi".to_string()); // pays the default 0.002, locked in Pending
+        let locked = c.pending.get(&0).unwrap().cost_paid;
+        c.set_thought_cost(U128(crate::state::ONE_NEAR / 250)); // raise to 0.004 while in flight
+        // a timeout refunds exactly the locked 0.002 -> balance back to 1.0, not 1.002
+        c.finalize_thought(0, Err(()), 10, locked);
+        assert_eq!(c.get_mind(0).unwrap().balance, NearToken::from_near(1));
+    }
+
+    #[test]
+    fn revive_wakes_an_asleep_mind_with_an_80_20_split() {
+        let mut c = Contract::default();
+        c.minds.insert(0, make_mind(NearToken::from_yoctonear(0), false, 500)); // asleep, empty
+        testing_env!(ctx_from("alice.near", NearToken::from_near(1)).build()); // pay the 1.0 revive price
+        c.revive(0);
+        let m = c.get_mind(0).unwrap();
+        assert_eq!(m.balance, NearToken::from_yoctonear(crate::state::ONE_NEAR * 80 / 100)); // 0.8 -> food
+        assert_eq!(m.asleep_since, 0); // awake again (0.8 >> one thought)
+        assert_eq!(
+            c.treasury_balance(),
+            NearToken::from_yoctonear(crate::state::ONE_NEAR * 20 / 100) // 0.2 -> treasury
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "no need to revive")]
+    fn revive_rejects_an_awake_mind() {
+        let mut c = Contract::default();
+        c.minds.insert(0, make_mind(NearToken::from_near(1), false, 0)); // awake
+        testing_env!(ctx_from("alice.near", NearToken::from_near(1)).build());
+        c.revive(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "memorial")]
+    fn revive_rejects_a_ghost() {
+        let mut c = Contract::default();
+        c.minds.insert(0, make_mind(NearToken::from_yoctonear(0), true, 500)); // ghost
+        testing_env!(ctx_from("alice.near", NearToken::from_near(1)).build());
+        c.revive(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "revive price")]
+    fn revive_below_the_price_panics() {
+        let mut c = Contract::default();
+        c.minds.insert(0, make_mind(NearToken::from_yoctonear(0), false, 500));
+        testing_env!(ctx_from("alice.near", NearToken::from_millinear(500)).build()); // 0.5 < 1.0
+        c.revive(0);
+    }
+
+    // --- governance invariants (regressions from the adversarial review) ---
+
+    #[test]
+    #[should_panic(expected = "raise the guest minimum first")]
+    fn raising_thought_cost_above_what_a_min_guest_covers_is_rejected() {
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        let mut c = Contract::default(); // guest_min 0.01 -> a guest leaves the Mind 0.007
+        // 0.008 is under the 0.1 ceiling but above the 0.007 a minimum guest actually covers.
+        c.set_thought_cost(U128(crate::state::ONE_NEAR * 8 / 1000));
+    }
+
+    #[test]
+    #[should_panic(expected = "after the 30%")]
+    fn a_guest_minimum_equal_to_the_thought_cost_is_rejected() {
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        let mut c = Contract::default(); // thought_cost 0.002
+        // p == cost looks fine on the gross deposit, but the Mind keeps only 0.0014 of it.
+        c.set_guest_min_price(U128(economy::THOUGHT_COMPUTE_COST));
+    }
+
+    #[test]
+    fn raising_thought_cost_after_raising_the_guest_minimum_is_allowed() {
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        let mut c = Contract::default();
+        // Lift the guest minimum first, then the thought cost may follow.
+        c.set_guest_min_price(U128(crate::state::ONE_NEAR / 10)); // 0.1 -> guest leaves 0.07
+        c.set_thought_cost(U128(crate::state::ONE_NEAR * 8 / 1000)); // 0.008 < 0.07, ok now
+        assert_eq!(
+            c.params().thought_cost,
+            NearToken::from_yoctonear(crate::state::ONE_NEAR * 8 / 1000)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "enough to wake")]
+    fn a_revive_price_too_low_to_wake_is_rejected() {
+        testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
+        let mut c = Contract::default();
+        c.set_revive_price(U128(1)); // 1 yocto -> wakes nobody
+    }
+
+    #[test]
+    #[should_panic(expected = "too small to wake")]
+    fn revive_reverts_when_the_deposit_cannot_wake_the_mind() {
+        let mut c = Contract::default();
+        // Force the misconfigured edge directly (the setters would reject it).
+        c.thought_cost = crate::state::ONE_NEAR / 10; // 0.1
+        c.revive_price = crate::state::ONE_NEAR / 100; // 0.01
+        c.minds.insert(0, make_mind(NearToken::from_yoctonear(0), false, 500)); // asleep, empty
+        testing_env!(ctx_from("alice.near", NearToken::from_millinear(10)).build()); // 0.01 deposit
+        c.revive(0); // to_mind 0.008 < 0.1 -> revert, no money taken
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot afford a thought")]
+    fn a_guest_chat_reverts_when_the_mind_cannot_afford_the_thought() {
+        let mut c = Contract::default();
+        c.thought_cost = crate::state::ONE_NEAR / 10; // 0.1 (direct, bypassing the invariant guard)
+        c.minds.insert(
+            0,
+            make_mind(NearToken::from_yoctonear(crate::state::ONE_NEAR / 1000), false, 0), // awake, 0.001
+        );
+        testing_env!(ctx_from("bob.near", NearToken::from_millinear(10)).build()); // guest pays 0.01
+        // credit leaves the Mind 0.008 < 0.1, so no thought is charged -> chat must revert,
+        // never parking a thought that a later timeout would refund as minted NEAR.
+        let _ = c.chat(0, "hi".to_string());
     }
 
     // --- the no-withdraw invariant ---
