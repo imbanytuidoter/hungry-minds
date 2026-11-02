@@ -158,6 +158,16 @@ pub struct PendingView {
     pub by_owner: bool,
 }
 
+/// One row of the living-Minds leaderboard (JSON view).
+#[near(serializers = [json])]
+pub struct MindRank {
+    pub id: u64,
+    pub name: String,
+    pub thoughts: u64,
+    pub balance: NearToken,
+    pub state: String,
+}
+
 #[near(contract_state)]
 pub struct Contract {
     next_id: u64,
@@ -374,6 +384,32 @@ impl Contract {
     /// Protocol runway balance (treasury).
     pub fn treasury_balance(&self) -> NearToken {
         self.treasury
+    }
+
+    /// The living-Minds leaderboard: ranked by thoughts (most active first), ties broken by
+    /// balance (best-fed first). Ghosts are dead and never appear. `limit` is capped at 50
+    /// (default 10). A read-only view — it scans all Minds, which is fine at demo scale.
+    pub fn leaderboard(&self, limit: Option<u64>) -> Vec<MindRank> {
+        let lim = limit.map(|l| (l as usize).min(50)).unwrap_or(10);
+        let mut rows: Vec<MindRank> = self
+            .minds
+            .iter()
+            .filter(|(_, m)| !m.ghost)
+            .map(|(id, m)| MindRank {
+                id: *id,
+                name: m.name.clone(),
+                thoughts: m.thought_count,
+                balance: m.balance,
+                state: self.mind_state(*id).unwrap_or_default(),
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.thoughts
+                .cmp(&a.thoughts)
+                .then(b.balance.as_yoctonear().cmp(&a.balance.as_yoctonear()))
+        });
+        rows.truncate(lim);
+        rows
     }
 
     /// Read a Mind's full state.
@@ -1535,5 +1571,44 @@ mod tests {
         // 1 yocto is far below the storage cost of a new approval
         testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(1)).build());
         c.nft_approve("0".to_string(), "market.near".parse().unwrap(), None);
+    }
+
+    // --- leaderboard ---
+
+    fn ranked_mind(name: &str, thoughts: u64, balance: NearToken, ghost: bool) -> Mind {
+        let mut m = make_mind(balance, ghost, 0);
+        m.name = name.to_string();
+        m.thought_count = thoughts;
+        m
+    }
+
+    #[test]
+    fn leaderboard_ranks_living_minds_by_thoughts_and_respects_limit() {
+        let mut c = Contract::default();
+        c.minds.insert(0, ranked_mind("Alpha", 5, NearToken::from_near(1), false));
+        c.minds.insert(1, ranked_mind("Beta", 20, NearToken::from_near(1), false));
+        c.minds.insert(2, ranked_mind("Gamma", 10, NearToken::from_near(1), false));
+        c.minds.insert(3, ranked_mind("Wraith", 99, NearToken::from_near(1), true)); // ghost
+
+        let top2 = c.leaderboard(Some(2));
+        assert_eq!(top2.len(), 2);
+        assert_eq!(top2[0].name, "Beta"); // 20 thoughts
+        assert_eq!(top2[0].id, 1);
+        assert_eq!(top2[1].name, "Gamma"); // 10 thoughts
+
+        // ghosts are dead and never rank, however many thoughts they had
+        let all = c.leaderboard(None);
+        assert_eq!(all.len(), 3);
+        assert!(!all.iter().any(|r| r.name == "Wraith"));
+        assert_eq!(all.last().unwrap().name, "Alpha"); // fewest thoughts last
+    }
+
+    #[test]
+    fn leaderboard_breaks_ties_by_balance() {
+        let mut c = Contract::default();
+        c.minds.insert(0, ranked_mind("Lean", 7, NearToken::from_millinear(100), false));
+        c.minds.insert(1, ranked_mind("Plump", 7, NearToken::from_near(2), false));
+        let board = c.leaderboard(None);
+        assert_eq!(board[0].name, "Plump"); // same thoughts, more food wins the tie
     }
 }

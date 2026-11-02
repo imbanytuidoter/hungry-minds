@@ -92,6 +92,17 @@ export const svgForBare = (id: number) =>
 export const lastThought = (id: number) => viewContract<string | null>("last_thought", { id });
 export const totalMinds = () => viewContract<number>("total_minds");
 export const treasuryBalance = () => viewContract<string>("treasury_balance");
+
+export type MindRankOnChain = {
+  id: number;
+  name: string;
+  thoughts: number;
+  balance: string; // yoctoNEAR
+  state: string;
+};
+/** Living-Minds leaderboard (most thoughts first; ghosts excluded). */
+export const leaderboard = (limit = 10) =>
+  viewContract<MindRankOnChain[]>("leaderboard", { limit });
 export const pendingRequests = () =>
   viewContract<PendingRequest[]>("pending_requests", {});
 export const nftTokensForOwner = (account_id: string, limit = 50) =>

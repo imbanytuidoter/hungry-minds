@@ -12,7 +12,7 @@ the creature.
 That one rule — a token with a wallet it spends down by living — is the whole product.
 Everything else (the art, the economy, the lifecycle) follows from it.
 
-> Status: the on-chain contract is built and tested (69 unit tests + a sandbox integration
+> Status: the on-chain contract is built and tested (71 unit tests + a sandbox integration
 > suite, builds to wasm). The thinking "brain" (yield/resume + off-chain worker → NEAR AI) is
 > real; the web app reads the chain and signs actions through a wallet the moment it points at
 > a deployed contract. What's left is the testnet deploy itself and the verified-TEE upgrade —
@@ -47,7 +47,7 @@ to closed eyes with drifting z's asleep, to a hollow, dashed, floating ghost. Se
 ## Build & test
 
 ```bash
-# unit tests (69 of them)
+# unit tests (71 of them)
 cargo test --manifest-path contract/Cargo.toml
 
 # the deployable wasm artifact
@@ -99,7 +99,8 @@ Against a deployed contract `MIND`, with accounts `alice` (owner) and `bob` (str
   `think`/`chat` park a yielded promise (`Promise::new_yield`) and store the request; an
   off-chain worker ([`worker/`](worker/)) polls `pending_requests`, asks NEAR AI for an
   in-character reply, and calls `respond` to resume it; `on_thought` stores the reply or
-  refunds the thought on a 200-block timeout. 69 unit tests, plus a
+  refunds the thought on a 200-block timeout. There's also a living-Minds `leaderboard`
+  view (ranked by thoughts, ghosts excluded). 71 unit tests, plus a
   [sandbox integration suite](integration/) that runs the whole loop (deposits, splits,
   transfer, approval, yield/resume) against real `neard`; builds to wasm.
 - **Done, needs a deploy to light up:** the web app ([`web/`](web/)) reads the chain over RPC
