@@ -62,3 +62,39 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run build
+
+  integration:
+    name: Integration — sandbox game loop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contract/target
+          key: cargo-${{ hashFiles('contract/Cargo.lock') }}
+
+      - name: Build contract wasm
+        working-directory: contract
+        run: cargo build --target wasm32-unknown-unknown --release --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run sandbox tests
+        working-directory: integration
+        run: |
+          npm ci
+          npm test
+        env:
+          CONTRACT_WASM: ${{ github.workspace }}/contract/target/wasm32-unknown-unknown/release/hungry_minds_contract.wasm

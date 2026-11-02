@@ -1,0 +1,13 @@
+{
+  "name": "hungry-minds-integration",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end tests: the whole game loop against a real NEAR sandbox.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "near-workspaces": "^5.0.0"
+  }
+}
