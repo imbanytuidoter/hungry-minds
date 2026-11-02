@@ -24,6 +24,16 @@ export function nearToYocto(near: number): string {
   return (micro * microToYocto).toString();
 }
 
+const YOCTO_PER_NEAR = BigInt(10) ** BigInt(24);
+
+/** yoctoNEAR string -> NEAR (decimal). Lossy below ~1e-9, which is plenty for display. */
+export function yoctoToNear(yocto: string): number {
+  const y = BigInt(yocto || "0");
+  const whole = y / YOCTO_PER_NEAR;
+  const frac = y % YOCTO_PER_NEAR;
+  return Number(whole) + Number(frac) / Number(YOCTO_PER_NEAR);
+}
+
 // ── Contract data shapes (mirror the contract) ─────────────────────────────
 
 export type MindOnChain = {
@@ -77,6 +87,8 @@ export async function viewContract<T>(method: string, args: object = {}): Promis
 export const getMind = (id: number) => viewContract<MindOnChain | null>("get_mind", { id });
 export const mindState = (id: number) => viewContract<string | null>("mind_state", { id });
 export const svgFor = (id: number) => viewContract<string | null>("svg_for", { id });
+export const svgForBare = (id: number) =>
+  viewContract<string | null>("svg_for_bare", { id });
 export const lastThought = (id: number) => viewContract<string | null>("last_thought", { id });
 export const totalMinds = () => viewContract<number>("total_minds");
 export const treasuryBalance = () => viewContract<string>("treasury_balance");

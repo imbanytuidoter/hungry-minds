@@ -1,10 +1,14 @@
 import Link from "next/link";
-import { hero, gallery, isAlive, type MindState } from "@/lib/minds";
+import { hero, isAlive, type MindState } from "@/lib/minds";
+import { loadGallery } from "@/lib/live";
 import Creature from "@/components/Creature";
 import MindCard from "@/components/MindCard";
 import Vivarium from "@/components/Vivarium";
+import ConnectButton from "@/components/ConnectButton";
 
-const aliveCount = gallery.filter((m) => isAlive(m.state)).length;
+// Live mode reads the chain per request; preview mode is static-safe. Forcing dynamic
+// keeps the gallery fresh once a contract is configured.
+export const dynamic = "force-dynamic";
 
 const ARC: MindState[] = [
   "full",
@@ -15,7 +19,10 @@ const ARC: MindState[] = [
   "ghost",
 ];
 
-export default function Home() {
+export default async function Home() {
+  const { gallery, live } = await loadGallery();
+  const aliveCount = gallery.filter((m) => isAlive(m.state)).length;
+
   return (
     <main style={{ "--accent": hero.accent } as React.CSSProperties}>
       {/* ── nav ─────────────────────────────────────────────────────────── */}
@@ -26,19 +33,22 @@ export default function Home() {
         <nav className="flex items-center" style={{ gap: 22, fontSize: 15, color: "var(--text-mid)" }}>
           <a href="#life" className="nav-link">How it lives</a>
           <a href="#minds" className="nav-link">The Minds</a>
+          <ConnectButton />
           <Link href="/hatch" className="btn btn-ghost" style={{ padding: "9px 16px" }}>
             Hatch a Mind
           </Link>
         </nav>
       </header>
 
-      {/* ── preview notice ──────────────────────────────────────────────── */}
-      <div className="wrap">
-        <div className="preview-note">
-          Preview — these are sample Minds rendered by the real contract. Wallet
-          actions and live replies go on once it&rsquo;s deployed to testnet.
+      {/* ── preview notice (only until a contract is configured) ─────────── */}
+      {!live && (
+        <div className="wrap">
+          <div className="preview-note">
+            Preview — these are sample Minds rendered by the real contract. Wallet
+            actions and live replies go on once it&rsquo;s deployed to testnet.
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ── hero: the Vivarium ──────────────────────────────────────────── */}
       <Vivarium />

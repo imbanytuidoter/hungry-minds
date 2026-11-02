@@ -352,6 +352,17 @@ impl Contract {
         })
     }
 
+    /// Same creature, same live state, but with no background window — for the web
+    /// habitat where the Mind floats in its own light beam. The chain still draws it.
+    pub fn svg_for_bare(&self, id: u64) -> Option<String> {
+        self.minds.get(&id).map(|m| {
+            art::render_bare(&art::Face {
+                traits: m.traits,
+                appearance: m.appearance(),
+            })
+        })
+    }
+
     // --- NEP-171 / NEP-177 / NEP-181: the wallet + indexer surface ---
 
     /// Collection-level metadata (NEP-177).
@@ -1008,6 +1019,20 @@ mod tests {
         assert!(full.trim_start().starts_with("<svg"));
         assert_ne!(full, ghost, "a ghost must not look like a full Mind");
         assert_eq!(c.svg_for(99), None);
+    }
+
+    #[test]
+    fn svg_for_bare_is_transparent_current_state_art() {
+        let mut c = Contract::default();
+        c.minds.insert(0, make_mind(NearToken::from_near(1), false, 0)); // full
+        let framed = c.svg_for(0).expect("some");
+        let bare = c.svg_for_bare(0).expect("some");
+        assert!(bare.trim_start().starts_with("<svg"));
+        // The habitat floats the creature in its own light beam, so the bare
+        // variant must not paint its own background window (art.rs render_bare).
+        assert!(framed.contains("url(#bg"), "framed art paints a background");
+        assert!(!bare.contains("url(#bg"), "bare art is transparent");
+        assert_eq!(c.svg_for_bare(99), None);
     }
 
     // --- NEP-171 metadata + enumeration ---

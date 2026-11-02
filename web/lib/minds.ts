@@ -16,6 +16,8 @@ export type MindState =
 export type Mind = {
   id: number;
   name: string;
+  /** On-chain owner account (live mode only; undefined for preview samples). */
+  owner?: string;
   state: MindState;
   balanceNear: string;
   thoughts: number;

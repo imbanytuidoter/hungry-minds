@@ -10,6 +10,15 @@ import {
   isAlive,
   THOUGHT_COST,
 } from "@/lib/minds";
+import {
+  feed as chainFeed,
+  think as chainThink,
+  chat as chainChat,
+  getMind as chainGetMind,
+  lastThought as chainLastThought,
+  yoctoToNear,
+} from "@/lib/chain";
+import { useWallet } from "./WalletProvider";
 import Creature from "./Creature";
 import Mood from "./Mood";
 import Vital from "./Vital";
@@ -20,8 +29,22 @@ let lineSeq = 0;
 const nextId = () => `l${lineSeq++}`;
 
 const FEED_MEAL = 0.2; // NEAR; 95% reaches the Mind (economy.rs feed_split)
+const CHAT_PRICE = 0.01; // NEAR; a stranger's chat (economy.rs GUEST_PRICE)
 
-export default function MindDetail({ mind }: { mind: Mind }) {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+export default function MindDetail({
+  mind,
+  live = false,
+}: {
+  mind: Mind;
+  live?: boolean;
+}) {
+  const { accountId, signer, signIn } = useWallet();
+  // Live writes need both a configured contract (live) and a connected wallet.
+  const connected = live && !!signer;
+  const iOwnIt = connected && mind.owner === accountId;
   const start = parseFloat(mind.balanceNear) || 0;
   const [balance, setBalance] = useState(start);
   const [thoughts, setThoughts] = useState(mind.thoughts);
@@ -37,37 +60,115 @@ export default function MindDetail({ mind }: { mind: Mind }) {
   const svg = mind.svgsBare[state]; // frameless: it floats in the chamber, not a card
   const low = vitalPercent(state) <= 24 && awake;
 
-  function feed() {
-    if (ghost) return;
-    setBalance((b) => +(b + FEED_MEAL * 0.95).toFixed(4));
-    // juice: the creature hops and food rains down
+  // The creature hops and food rains down — played on every feed, live or preview.
+  function playFeedJuice() {
     setHop(true);
     setTimeout(() => setHop(false), 740);
     const id = burstSeq.current++;
     setBursts((b) => [...b, id]);
     setTimeout(() => setBursts((b) => b.filter((x) => x !== id)), 1000);
-    setLog((l) => [
-      ...l,
-      { who: "system", text: `You fed ${mind.name} a 0.2 NEAR meal.`, id: nextId() },
-    ]);
   }
 
-  function talk() {
+  // Re-read the Mind from chain and sync balance + thought count (live mode).
+  async function refresh() {
+    const m = await chainGetMind(mind.id);
+    if (!m) return;
+    setBalance(yoctoToNear(m.balance));
+    setThoughts(m.thought_count);
+  }
+
+  function say(line: Line) {
+    setLog((l) => [...l, line]);
+  }
+
+  async function feed() {
+    if (ghost) return;
+    if (live && !connected) {
+      signIn();
+      return;
+    }
+    playFeedJuice();
+
+    if (connected && signer) {
+      say({ who: "system", text: `Feeding ${mind.name} a 0.2 NEAR meal…`, id: nextId() });
+      try {
+        await chainFeed(signer, mind.id, FEED_MEAL); // may redirect (browser wallet)
+        await refresh();
+        say({ who: "system", text: `Fed. ${mind.name} is topped up on-chain.`, id: nextId() });
+      } catch (e) {
+        say({ who: "system", text: `Feeding didn't go through: ${errText(e)}`, id: nextId() });
+      }
+      return;
+    }
+
+    // Preview: mirror the on-chain feed split locally (95% reaches the Mind).
+    setBalance((b) => +(b + FEED_MEAL * 0.95).toFixed(4));
+    say({ who: "system", text: `You fed ${mind.name} a 0.2 NEAR meal.`, id: nextId() });
+  }
+
+  async function talk() {
     const text = draft.trim();
     if (!text || !awake || ghost) return;
+    if (live && !connected) {
+      signIn();
+      return;
+    }
     setDraft("");
-    setBalance((b) => +Math.max(0, b - THOUGHT_COST).toFixed(4));
-    setThoughts((t) => t + 1);
     const pendingId = nextId();
     setLog((l) => [
       ...l,
       { who: "you", text, id: nextId() },
       { who: "mind", text: "…", id: pendingId },
     ]);
-    // Honest: the brain is not wired on this preview. The thought still COST the
-    // Mind 0.002 NEAR — that is the real on-chain mechanic. We do not fake a reply.
-    // Resolve the placeholder by its stable id (not its position), so feeding or
-    // sending again before this fires can't strand a "…" bubble.
+
+    if (connected && signer) {
+      try {
+        const before = await chainLastThought(mind.id);
+        // Owner thinks for free (the Mind pays); a stranger pays the guest price.
+        if (iOwnIt) await chainThink(signer, mind.id, text);
+        else await chainChat(signer, mind.id, text, CHAT_PRICE);
+        await refresh();
+        // The reply only lands once the off-chain worker answers the yielded request.
+        let reply: string | null = null;
+        for (let i = 0; i < 12; i++) {
+          await sleep(2500);
+          const now = await chainLastThought(mind.id);
+          if (now && now !== before) {
+            reply = now;
+            break;
+          }
+        }
+        setLog((l) =>
+          l.map((line) =>
+            line.id === pendingId
+              ? reply
+                ? { who: "mind", text: reply, id: pendingId }
+                : {
+                    who: "system",
+                    text: "The thought was parked on-chain and cost its balance — a reply lands once the worker (NEAR AI key) is running. Without it, the request refunds after ~200 blocks.",
+                    id: pendingId,
+                  }
+              : line
+          )
+        );
+        await refresh();
+      } catch (e) {
+        setLog((l) =>
+          l.map((line) =>
+            line.id === pendingId
+              ? { who: "system", text: `That didn't go through: ${errText(e)}`, id: pendingId }
+              : line
+          )
+        );
+      }
+      return;
+    }
+
+    // Preview: the thought still COSTS the Mind 0.002 NEAR — the real mechanic. We do
+    // not fake a reply. Resolve the placeholder by its stable id so a second send can't
+    // strand a "…" bubble.
+    setBalance((b) => +Math.max(0, b - THOUGHT_COST).toFixed(4));
+    setThoughts((t) => t + 1);
     setTimeout(() => {
       setLog((l) =>
         l.map((line) =>
@@ -97,19 +198,21 @@ export default function MindDetail({ mind }: { mind: Mind }) {
         </Link>
       </header>
 
-      <div
-        className="card"
-        style={{
-          padding: "11px 16px",
-          marginBottom: 24,
-          fontSize: 13.5,
-          color: "var(--text-mid)",
-          background: "color-mix(in oklab, var(--accent) 7%, var(--surface))",
-        }}
-      >
-        Preview — moods and feeding follow the real contract rules. Wallet actions
-        and live replies turn on once {mind.name} is on testnet.
-      </div>
+      {!live && (
+        <div
+          className="card"
+          style={{
+            padding: "11px 16px",
+            marginBottom: 24,
+            fontSize: 13.5,
+            color: "var(--text-mid)",
+            background: "color-mix(in oklab, var(--accent) 7%, var(--surface))",
+          }}
+        >
+          Preview — moods and feeding follow the real contract rules. Wallet actions
+          and live replies turn on once {mind.name} is on testnet.
+        </div>
+      )}
 
       <div className="detail-grid">
         {/* creature + vitals */}

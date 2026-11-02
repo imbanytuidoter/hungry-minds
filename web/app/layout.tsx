@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
+import WalletProvider from "@/components/WalletProvider";
 
 const display = Bricolage_Grotesque({
   subsets: ["latin"],
@@ -27,7 +28,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${display.variable} ${sans.variable}`}>{children}</body>
+      <body className={`${display.variable} ${sans.variable}`}>
+        <WalletProvider>{children}</WalletProvider>
+      </body>
     </html>
   );
 }

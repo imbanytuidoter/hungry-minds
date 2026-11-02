@@ -3,10 +3,46 @@
 import { useState } from "react";
 import Link from "next/link";
 import { hero } from "@/lib/minds";
+import { hatchMind, isLive } from "@/lib/chain";
+import { useWallet } from "@/components/WalletProvider";
 import Creature from "@/components/Creature";
 
 export default function Hatch() {
   const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const { signer, signIn } = useWallet();
+  const live = isLive();
+
+  async function hatch() {
+    if (!live) return;
+    if (!signer) {
+      signIn();
+      return;
+    }
+    const n = name.trim();
+    if (n.length < 1 || n.length > 32) {
+      setErr("A name is 1–32 characters.");
+      return;
+    }
+    setErr(null);
+    setBusy(true);
+    try {
+      await hatchMind(signer, n); // 2 NEAR deposit; browser wallet redirects to confirm
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const label = !live
+    ? "Connect wallet to hatch — 2 NEAR"
+    : !signer
+    ? "Connect wallet to hatch — 2 NEAR"
+    : busy
+    ? "Hatching…"
+    : "Hatch — 2 NEAR";
 
   return (
     <main
@@ -75,11 +111,20 @@ export default function Hatch() {
             </li>
           </ul>
 
-          <button className="btn btn-primary" style={{ marginTop: 28 }} disabled>
-            Connect wallet to hatch — 2 NEAR
+          <button
+            className="btn btn-primary"
+            style={{ marginTop: 28 }}
+            onClick={hatch}
+            disabled={!live || busy || (!!signer && !name.trim())}
+          >
+            {label}
           </button>
-          <p style={{ color: "var(--text-dim)", fontSize: 13, marginTop: 12 }}>
-            Hatching connects to your NEAR wallet once the contract is live on testnet.
+          <p style={{ color: err ? "var(--accent)" : "var(--text-dim)", fontSize: 13, marginTop: 12 }}>
+            {err
+              ? err
+              : live
+              ? "Hatching asks your NEAR wallet to confirm the 2 NEAR deposit."
+              : "Hatching connects to your NEAR wallet once the contract is live on testnet."}
           </p>
         </section>
       </div>
