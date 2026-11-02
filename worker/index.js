@@ -12,6 +12,7 @@
 
 const { connect, keyStores, KeyPair, utils } = require("near-api-js");
 const { systemPrompt } = require("./personality");
+const { cleanReply, withTimeout } = require("./reply");
 
 const CONTRACT_ID = required("CONTRACT_ID");
 const WORKER_ID = required("WORKER_ID");
@@ -23,6 +24,10 @@ const NEAR_AI_URL =
 const NEAR_AI_MODEL = process.env.NEAR_AI_MODEL || "deepseek-v3.1";
 const NETWORK = process.env.NEAR_NETWORK || "testnet";
 const POLL_MS = parseInt(process.env.POLL_MS || "3000", 10);
+const NEAR_AI_TIMEOUT_MS = parseInt(process.env.NEAR_AI_TIMEOUT_MS || "30000", 10);
+// Give up after this many failed attempts on one request; it then times out on-chain and the
+// Mind is refunded (finalize_thought), so a persistently failing thought can't be hammered.
+const MAX_ATTEMPTS = parseInt(process.env.MAX_ATTEMPTS || "3", 10);
 const GAS = "60000000000000"; // 60 Tgas for respond
 
 function required(name) {
@@ -46,24 +51,29 @@ async function nearAccount() {
 }
 
 async function askNearAI(mind, prompt) {
-  const res = await fetch(NEAR_AI_URL, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${NEAR_AI_KEY}`,
-    },
-    body: JSON.stringify({
-      model: NEAR_AI_MODEL,
-      max_tokens: 160,
-      messages: [
-        { role: "system", content: systemPrompt(mind) },
-        { role: "user", content: prompt },
-      ],
+  const res = await withTimeout(
+    fetch(NEAR_AI_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${NEAR_AI_KEY}`,
+      },
+      body: JSON.stringify({
+        model: NEAR_AI_MODEL,
+        max_tokens: 160,
+        messages: [
+          { role: "system", content: systemPrompt(mind) },
+          { role: "user", content: prompt },
+        ],
+      }),
     }),
-  });
+    NEAR_AI_TIMEOUT_MS,
+    "NEAR AI request"
+  );
   if (!res.ok) throw new Error(`NEAR AI ${res.status}: ${await res.text()}`);
   const data = await res.json();
-  return (data.choices?.[0]?.message?.content || "").trim();
+  // Clamp to what the contract will store (char-safe), so we don't pay gas for truncated bytes.
+  return cleanReply(data.choices?.[0]?.message?.content);
 }
 
 async function main() {
@@ -75,14 +85,22 @@ async function main() {
 
   // Avoid double-answering the same request if a reply tx is slow to land.
   const inFlight = new Set();
+  // request_id -> failed attempts; a request that keeps failing is abandoned (it then times
+  // out on-chain and refunds the Mind) so we never hammer it forever.
+  const attempts = new Map();
 
   for (;;) {
     try {
       const pending = await view("pending_requests", {});
+      const live = new Set(pending.map((r) => r.request_id));
+      // forget attempt counts for requests that are no longer pending (answered or timed out)
+      for (const id of attempts.keys()) if (!live.has(id)) attempts.delete(id);
+
       for (const req of pending) {
         if (inFlight.has(req.request_id)) continue;
+        if ((attempts.get(req.request_id) || 0) >= MAX_ATTEMPTS) continue; // given up
         inFlight.add(req.request_id);
-        handle(account, view, req).finally(() => inFlight.delete(req.request_id));
+        handle(account, view, req, attempts).finally(() => inFlight.delete(req.request_id));
       }
     } catch (e) {
       console.error("poll error:", e.message);
@@ -91,9 +109,16 @@ async function main() {
   }
 }
 
-async function handle(account, view, req) {
+async function handle(account, view, req, attempts) {
+  const n = (attempts.get(req.request_id) || 0) + 1;
+  attempts.set(req.request_id, n);
   try {
     const mind = await view("get_mind", { id: req.mind_id });
+    if (!mind) {
+      // The Mind was transferred or reaped mid-flight; nothing to answer.
+      attempts.delete(req.request_id);
+      return;
+    }
     const state = (await view("mind_state", { id: req.mind_id })) || "content";
     const reply = await askNearAI({ ...mind, state }, req.prompt);
     if (!reply) throw new Error("empty reply");
@@ -105,10 +130,14 @@ async function handle(account, view, req) {
       gas: GAS,
       attachedDeposit: "0",
     });
+    attempts.delete(req.request_id);
     console.log(`#${req.request_id} mind ${req.mind_id}: ${reply.slice(0, 80)}`);
   } catch (e) {
-    console.error(`#${req.request_id} failed:`, e.message);
-    // Leave it parked; it either retries next poll or times out on-chain (refund).
+    console.error(`#${req.request_id} attempt ${n}/${MAX_ATTEMPTS} failed:`, e.message);
+    if (n >= MAX_ATTEMPTS) {
+      console.error(`#${req.request_id} abandoned; it will time out on-chain and refund the Mind.`);
+    }
+    // Otherwise leave it parked; the next poll retries it.
   }
 }
 
