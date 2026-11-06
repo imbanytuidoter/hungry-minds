@@ -234,7 +234,7 @@ documented publicly yet ([market.near.ai/list-agent](https://market.near.ai/list
 
 ## Built in the hackathon window
 
-- **No prior work.** The first commit is `9fb59e7` on 2026-11-01 19:08 (UTC+2), after the
+- **No prior work.** The first commit is `e382557` on 2026-11-01 19:08 (UTC+2), after the
   hackathon announcement of 2026-10-19 (Q-001); there is no code from before, no earlier
   version and no product on another chain. Everything in this repository (contract, site,
   worker, agent gateway, SDK, QA) was written between 2026-11-01 and the submission, and
