@@ -7,3 +7,4 @@ node_modules/
 *.wasm
 dist/
 .DS_Store
+/mainnet-build/

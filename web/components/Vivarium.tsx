@@ -140,8 +140,8 @@ export default function Vivarium() {
             asleep, and fade for good.
           </p>
           <div className="pitch-cta">
-            <Link href="/hatch" className="btn btn-primary btn-lg">
-              Hatch a Mind — 2 NEAR
+            <Link href="/app" className="btn btn-primary btn-lg">
+              Play — hatch a Mind
             </Link>
             <a href="#minds" className="btn btn-ghost btn-lg">
               Meet the Minds

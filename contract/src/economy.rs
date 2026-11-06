@@ -10,13 +10,13 @@
 //! of each, seeded from these consts, and the contract account may retune them
 //! (see `Contract::set_*`). Economy design flag #1: the thought cost is a peg to the
 //! real inference cost × NEAR price and MUST be tunable, never frozen. The split
-//! *ratios* (hatch 1/0.25/rest, feed 95/5, guest 70/20/10, revive) stay fixed here.
+//! *ratios* (hatch 1/0.25/rest, feed 95/5, guest 90/10, revive) stay fixed here.
 
 use crate::state::ONE_NEAR;
 
-/// Hatch price. Split: 1.0 seed -> Mind balance, 0.25 locked storage, rest -> treasury.
-pub const MINT_PRICE: u128 = 2 * ONE_NEAR;
-pub const MINT_SEED: u128 = ONE_NEAR; // 1.0 NEAR -> the newborn's own food
+/// Hatch price. Split: 0.1 seed -> Mind balance, 0.25 locked storage, rest -> treasury.
+pub const MINT_PRICE: u128 = ONE_NEAR;
+pub const MINT_SEED: u128 = ONE_NEAR / 10; // 0.1 NEAR -> the newborn's own food
 pub const MINT_STORAGE_RESERVE: u128 = ONE_NEAR / 4; // 0.25 NEAR locked for state
 
 /// DEFAULT for what one reply ("thought") burns from a Mind's balance. 1 NEAR ~= 500
@@ -39,7 +39,7 @@ pub const GUEST_PRICE: u128 = ONE_NEAR / 100; // 0.01 NEAR
 /// Mind. Always optional: feeding a little or letting guests pay to chat also wakes a
 /// Mind for free (just slower), so revive is never the only way back. Governable: seeds
 /// `Contract::revive_price`.
-pub const REVIVE_PRICE: u128 = ONE_NEAR; // 1.0 NEAR
+pub const REVIVE_PRICE: u128 = ONE_NEAR / 10; // 0.1 NEAR
 
 /// Treasury share of a `revive` deposit, in basis points. Higher than feed's 5%: revive is
 /// a premium convenience, and the surplus over feed is the protocol's fee for it. The rest
@@ -56,7 +56,7 @@ pub struct MintSplit {
 /// Split the hatch deposit. Requires `deposit >= MINT_PRICE`; any excess over the
 /// fixed seed + storage reserve goes to treasury.
 pub fn mint_split(deposit: u128) -> MintSplit {
-    assert!(deposit >= MINT_PRICE, "hatch needs at least 2 NEAR");
+    assert!(deposit >= MINT_PRICE, "hatch needs at least 1 NEAR");
     MintSplit {
         seed: MINT_SEED,
         storage_reserve: MINT_STORAGE_RESERVE,
@@ -66,18 +66,16 @@ pub fn mint_split(deposit: u128) -> MintSplit {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct GuestSplit {
-    pub to_mind: u128,
     pub to_owner: u128,
     pub to_treasury: u128,
 }
 
-/// Guest pay-to-chat split: 70% Mind / 20% owner / 10% treasury (Mind keeps the remainder).
+/// What others pay to use a Mind (guest chat, service, job): 90% to her owner, 10% to the
+/// protocol. None of it goes into her food: feeding her is her owner's job.
 pub fn guest_split(deposit: u128) -> GuestSplit {
-    let to_owner = deposit * 20 / 100;
     let to_treasury = deposit * 10 / 100;
     GuestSplit {
-        to_mind: deposit - to_owner - to_treasury, // remainder favours the Mind
-        to_owner,
+        to_owner: deposit - to_treasury, // remainder favours the owner
         to_treasury,
     }
 }
@@ -118,37 +116,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mint_of_exactly_two_near_splits_1_025_075() {
+    fn mint_of_exactly_one_near_splits_01_025_065() {
         let s = mint_split(MINT_PRICE);
-        assert_eq!(s.seed, ONE_NEAR);
+        assert_eq!(s.seed, ONE_NEAR / 10);
         assert_eq!(s.storage_reserve, ONE_NEAR / 4);
-        assert_eq!(s.treasury, ONE_NEAR * 3 / 4); // 0.75
+        assert_eq!(s.treasury, ONE_NEAR * 65 / 100); // 0.65
         assert_eq!(s.seed + s.storage_reserve + s.treasury, MINT_PRICE);
     }
 
     #[test]
     fn mint_overpay_sends_excess_to_treasury() {
         let s = mint_split(3 * ONE_NEAR);
-        assert_eq!(s.seed, ONE_NEAR);
+        assert_eq!(s.seed, ONE_NEAR / 10);
         assert_eq!(s.storage_reserve, ONE_NEAR / 4);
-        assert_eq!(s.treasury, 3 * ONE_NEAR - ONE_NEAR - ONE_NEAR / 4); // 1.75
+        assert_eq!(s.treasury, 3 * ONE_NEAR - ONE_NEAR / 10 - ONE_NEAR / 4); // 2.65
         assert_eq!(s.seed + s.storage_reserve + s.treasury, 3 * ONE_NEAR);
     }
 
     #[test]
-    fn guest_chat_of_one_hundredth_near_is_70_20_10() {
+    fn guest_payment_of_one_hundredth_near_is_90_10() {
         let s = guest_split(ONE_NEAR / 100); // 0.01
-        assert_eq!(s.to_mind, ONE_NEAR * 7 / 1000); // 0.007
-        assert_eq!(s.to_owner, ONE_NEAR * 2 / 1000); // 0.002
+        assert_eq!(s.to_owner, ONE_NEAR * 9 / 1000); // 0.009
         assert_eq!(s.to_treasury, ONE_NEAR / 1000); // 0.001
-        assert_eq!(s.to_mind + s.to_owner + s.to_treasury, ONE_NEAR / 100);
+        assert_eq!(s.to_owner + s.to_treasury, ONE_NEAR / 100);
     }
 
     #[test]
     fn guest_split_conserves_on_indivisible_amount() {
         let d = 7u128; // not divisible by 10
         let s = guest_split(d);
-        assert_eq!(s.to_mind + s.to_owner + s.to_treasury, d);
+        assert_eq!(s.to_owner + s.to_treasury, d);
     }
 
     #[test]
@@ -186,7 +183,7 @@ mod tests {
         // A guest paying the default minimum must leave the Mind strictly better off
         // than the default thought it triggers costs it.
         let s = guest_split(GUEST_PRICE);
-        assert!(s.to_mind > THOUGHT_COMPUTE_COST);
+        assert!(s.to_owner > THOUGHT_COMPUTE_COST);
     }
 
     #[test]

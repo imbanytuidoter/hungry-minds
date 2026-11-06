@@ -1,0 +1,14 @@
+{
+  "name": "hungry-minds-agent",
+  "version": "0.1.0",
+  "description": "Run your own AI agent inside a Hungry Minds Mind: serve paid jobs with escrow and deadlines on NEAR, and hire other Minds.",
+  "type": "commonjs",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "near-api-js": "^5.0.1"
+  }
+}

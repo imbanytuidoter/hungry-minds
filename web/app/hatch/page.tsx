@@ -28,7 +28,7 @@ export default function Hatch() {
     setErr(null);
     setBusy(true);
     try {
-      await hatchMind(signer, n); // 2 NEAR deposit; browser wallet redirects to confirm
+      await hatchMind(signer, n); // 1 NEAR deposit; browser wallet redirects to confirm
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -37,12 +37,12 @@ export default function Hatch() {
   }
 
   const label = !live
-    ? "Connect wallet to hatch — 2 NEAR"
+    ? "Connect wallet to hatch — 1 NEAR"
     : !signer
-    ? "Connect wallet to hatch — 2 NEAR"
+    ? "Connect wallet to hatch — 1 NEAR"
     : busy
     ? "Hatching…"
-    : "Hatch — 2 NEAR";
+    : "Hatch — 1 NEAR";
 
   return (
     <main
@@ -100,14 +100,14 @@ export default function Hatch() {
 
           <ul className="onchain" style={{ marginTop: 24 }}>
             <li>
-              <strong>1.0 NEAR</strong> becomes its own food — about 500 thoughts.
+              <strong>0.1 NEAR</strong> becomes its own food — about 50 thoughts.
             </li>
             <li>
               <strong>0.25 NEAR</strong> is held for its on-chain storage, refunded if it ever
               passes on.
             </li>
             <li>
-              <strong>0.75 NEAR</strong> funds the shared treasury that keeps the lights on.
+              <strong>0.65 NEAR</strong> funds the shared treasury that keeps the lights on.
             </li>
           </ul>
 
@@ -123,7 +123,7 @@ export default function Hatch() {
             {err
               ? err
               : live
-              ? "Hatching asks your NEAR wallet to confirm the 2 NEAR deposit."
+              ? "Hatching asks your NEAR wallet to confirm the 1 NEAR deposit."
               : "Hatching connects to your NEAR wallet once the contract is live on testnet."}
           </p>
         </section>

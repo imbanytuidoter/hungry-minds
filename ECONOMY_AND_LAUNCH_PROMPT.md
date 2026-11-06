@@ -1,5 +1,10 @@
 # Hungry Minds — фінансова модель + дизайн-промпт «Launch App»
 
+> **Historical planning document (1–2 Nov 2026).** The economy changed on 2026-11-04: whatever
+> others pay to use a Mind goes **90% to the NFT owner, 10% to the protocol, nothing into her
+> food** (the owner feeds her); a Mind sale gives the seller 100%. The current description is
+> [README.md](README.md). / Історичний документ: актуальний опис і економіка — у README.md.
+
 > Один файл для передачі: Частина A — економіка/фінанси (для розробника + фаундера), Частина B — дизайн-промпт для «Launch App» (для дизайнера або дизайн-AI). Станом на 2026-11-02. Числа — припущення дизайну для тестнету, не ринкові прогнози.
 
 ---

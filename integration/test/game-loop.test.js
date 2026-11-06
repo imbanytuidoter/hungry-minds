@@ -1,14 +1,14 @@
 // End-to-end: the whole Hungry Minds game loop against a real NEAR sandbox.
 //
-// Unit tests (contract/src, 58 of them) mock the VM. These run the compiled wasm in a
-// real runtime, so they prove the parts a mock can't: real attached deposits, the 70/20/10
-// and 95/5 splits across real account balances, NEP-171 ownership transfer, and — the
-// centrepiece — the yield/resume "brain": think/chat park a yielded promise, the worker
-// (played here by root) calls respond, and the reply lands on-chain.
+// Unit tests (contract/src) mock the VM. These run the compiled wasm in a real runtime, so
+// they prove the parts a mock can't: real attached deposits, the 90/10 (guest chat) and 95/5
+// (feed) splits across real account balances, NEP-171 ownership transfer, NEP-199 payouts,
+// and — the centrepiece — the yield/resume "brain": think/chat park a yielded promise, the
+// worker (played here by root, approved with add_responder) calls respond, and the reply lands
+// on-chain.
 //
-// Runs in CI on Linux (see .github/workflows/ci.yml). It CANNOT run on Windows: near-sandbox
-// ships no Windows binary (its install throws "Unsupported platform: Windows_NT"). So this
-// file is authored against the near-workspaces 5.x API and verified in CI, not on the dev box.
+// Runs on Linux or macOS. It CANNOT run on Windows: near-sandbox ships no Windows binary (its
+// install throws "Unsupported platform: Windows_NT"); on a Windows box run it under WSL.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -80,6 +80,8 @@ test("the whole game loop, on a real sandbox", async (t) => {
   const bob = await root.createSubAccount("bob", {
     initialBalance: ONE_NEAR * 10n,
   });
+  // only approved responders may answer a parked thought: root plays the worker
+  await contract.call(contract, "add_responder", { account_id: root.accountId }, { gas: T300 });
 
   try {
     await t.test("hatch mints a Mind seeded with its own food", async () => {
@@ -87,14 +89,14 @@ test("the whole game loop, on a real sandbox", async (t) => {
         contract,
         "hatch_mind",
         { name: "Juno" },
-        { attachedDeposit: ONE_NEAR * 2n, gas: T300 }
+        { attachedDeposit: ONE_NEAR, gas: T300 }
       );
       assert.equal(await contract.view("total_minds", {}), 1);
 
       const m = await contract.view("get_mind", { id: 0 });
       assert.equal(m.owner, alice.accountId);
       assert.equal(m.name, "Juno");
-      assert.equal(BigInt(m.balance), ONE_NEAR, "1.0 NEAR becomes the Mind's food");
+      assert.equal(BigInt(m.balance), ONE_NEAR / 10n, "0.1 of the 1 NEAR hatch becomes the Mind's food");
       assert.equal(m.thought_count, 0);
       assert.equal(await contract.view("mind_state", { id: 0 }), "full");
     });
@@ -127,7 +129,7 @@ test("the whole game loop, on a real sandbox", async (t) => {
       );
     });
 
-    await t.test("a stranger pays to chat: 70/20/10, and the Mind thinks a reply", async () => {
+    await t.test("a stranger pays to chat: 90% to the owner, 10% treasury, and the Mind thinks a reply", async () => {
       const before = BigInt((await contract.view("get_mind", { id: 0 })).balance);
       const { reply } = await answerOneThought(
         contract,
@@ -144,10 +146,10 @@ test("the whole game loop, on a real sandbox", async (t) => {
       assert.ok(reply.startsWith("re:"), "the guest's chat gets a reply too");
 
       const m = await contract.view("get_mind", { id: 0 });
-      // +70% of the 0.01 guest fee to the Mind, then it spends 0.002 thinking.
-      assert.equal(BigInt(m.balance), before + (GUEST * 70n) / 100n - THOUGHT);
-      // 20% is the owner's to claim; never the Mind's food.
-      assert.equal(BigInt(m.owner_unclaimed), (GUEST * 20n) / 100n);
+      // nothing of the guest's fee goes into her food: she only spends 0.002 thinking
+      assert.equal(BigInt(m.balance), before - THOUGHT);
+      // 90% is the owner's to claim; never the Mind's food
+      assert.equal(BigInt(m.owner_unclaimed), (GUEST * 90n) / 100n);
     });
 
     await t.test("feeding tops it up — 95% reaches the Mind", async () => {
@@ -193,6 +195,13 @@ test("the whole game loop, on a real sandbox", async (t) => {
       });
       assert.equal(mine.length, 1);
       assert.equal(mine[0].token_id, "0");
+    });
+
+    await t.test("NEP-199: the whole sale goes to the owner, no royalties", async () => {
+      const p = await contract.view("nft_payout", { token_id: "0", balance: "1000", max_len_payout: 10 });
+      assert.deepEqual(p.payout, { [bob.accountId]: "1000" });
+      const meta = await contract.view("nft_metadata", {});
+      assert.ok(meta.icon.startsWith("data:image/svg+xml;base64,"), "the collection has an icon");
     });
 
     await t.test("NEP-178: an approved marketplace transfers, then approvals clear", async () => {

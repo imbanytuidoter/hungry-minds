@@ -2,13 +2,16 @@
 
 End-to-end tests that run the **compiled contract wasm in a real NEAR sandbox** (via
 [`near-workspaces`](https://github.com/near/near-workspaces-js)). The unit tests in
-`contract/src` (58 of them) mock the VM; these prove what a mock can't:
+`contract/src` mock the VM; these prove what a mock can't:
 
-- real attached deposits and the **70/20/10** (guest chat) and **95/5** (feed) splits moving
-  real balances between accounts,
-- NEP-171 ownership transfer carrying balance + traits + memory,
+- real attached deposits and the **90/10** (guest chat: owner / treasury, nothing into her
+  food) and **95/5** (feed) splits moving real balances between accounts,
+- NEP-171 ownership transfer carrying balance + traits + memory, NEP-178 approvals, NEP-199
+  payouts,
 - the **yield/resume "brain"**: `think`/`chat` park a yielded promise, the worker (played by
-  `root`) calls `respond`, and the reply lands on-chain.
+  `root`, approved with `add_responder`) calls `respond`, and the reply lands on-chain.
+
+On Windows, run it under WSL (near-sandbox ships no Windows binary).
 
 ## Run it (Linux / macOS)
 

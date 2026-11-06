@@ -7,5 +7,7 @@
 pub mod art;
 pub mod contract;
 pub mod economy;
+pub mod glossy;
+pub mod glossy_parts;
 pub mod state;
 pub mod traits;

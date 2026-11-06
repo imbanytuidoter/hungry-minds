@@ -20,6 +20,18 @@ test("cleanReply clamps to the contract's max, code-point-safe", () => {
   assert.ok(!clamped.includes("�"), "no replacement char from a split pair");
 });
 
+test("cleanReply drops citation markers models append", () => {
+  assert.equal(cleanReply("a locked quanta of rhythm.^1"), "a locked quanta of rhythm.");
+  assert.equal(cleanReply("Stars are hot [1] and far [^2]."), "Stars are hot and far.");
+  assert.equal(cleanReply("Hi 【3†source】there"), "Hi there");
+});
+
+test("cleanReply keeps exponents", () => {
+  assert.equal(cleanReply("2^10 is 1024"), "2^10 is 1024");
+  assert.equal(cleanReply("Area grows as r^2, you see."), "Area grows as r^2, you see.");
+  assert.equal(cleanReply("So true!^2 Yes."), "So true! Yes.");
+});
+
 test("cleanReply honours a custom max", () => {
   assert.equal(cleanReply("hello world", 5), "hello");
 });

@@ -1,5 +1,68 @@
 # Deploy Hungry Minds to testnet
 
+## Current deploy
+
+`hungry-minds-8250f6.testnet` (demo-window build), deployed **clean**: no Minds were hatched
+for it, so every Mind, service, sale and ghost you see there is a real player's. Worker:
+`hm-worker-19652a.testnet`, approved with `add_responder` (only approved responders may answer
+thoughts).
+Keys are in the deployer's `~/.near-credentials/testnet/`, never in this repo. The web app
+points here by default.
+
+`hungry-minds-19652a.testnet` is the earlier development deploy: its 14 Minds were all
+hatched by the team's seed and test accounts during setup and QA. Kept for reference only.
+
+## Changing the live deploy (the only supported way)
+
+```bash
+node qa/run.js            # the whole suite on the QA contract; stamps qa/out/last-pass.json when it all passes
+node ops/deploy-live.js   # refuses unless that stamp matches this exact code; then deploys the contract and the site
+```
+
+Never deploy by hand with `worker/redeploy.js` against the live contract: the deploy script is what
+checks the QA stamp, the contract's free NEAR for storage, that the new code answers, and builds
+the site beside the running one so visitors never see a half-built site. See `qa/README.md`.
+
+The live site and worker run under a supervisor that restarts them when they crash or stop
+answering, and keeps running after the terminal that started it closes:
+
+```bash
+node ops/live.js start    # in the background; logs in ops/logs/
+node ops/live.js status   # supervisor, worker and site
+node ops/live.js stop
+```
+
+## Quick path: no near-cli, just node (what produced the deploy above)
+
+`rpc.testnet.near.org` is deprecated and rate-limits, so the scripts default to FastNEAR. If
+FastNEAR's free tier returns 429, set `NEAR_RPC=https://near-testnet.drpc.org`.
+
+```bash
+# wasm (near-sdk 5.29 needs Rust >= 1.93; Windows hosts without MSVC use the gnu toolchain).
+# --cfg near is what cargo-near sets: without it near-sdk compiles env::panic_str's off-chain
+# branch and every contract error reaches users as a bare "wasm trap: unreachable".
+RUSTFLAGS="--cfg near" cargo +stable-x86_64-pc-windows-gnu build --target wasm32-unknown-unknown --release \
+  --features demo-window --manifest-path contract/Cargo.toml
+
+cd worker && npm ci
+node testnet-account.js hungry-minds-<suffix>.testnet           # faucet-funded account, key -> ~/.near-credentials
+node setup-testnet.js hungry-minds-<suffix>.testnet ../contract/target/wasm32-unknown-unknown/release/hungry_minds_contract.wasm <suffix>
+#   deploys, creates worker + two keeper accounts, hatches 6 Minds with looks,
+#   publishes 7 services, lists one Mind for sale
+node smoke-testnet.js hungry-minds-<suffix>.testnet <suffix>     # think + order_service, prints the splits
+node smoke-colony.js  hungry-minds-<suffix>.testnet <suffix>     # set_look, list/unlist, pause
+node redeploy.js hungry-minds-<suffix>.testnet <wasm>            # new code, same state
+node reset-contract.js hungry-minds-<suffix>.testnet <wasm> <beneficiary>.testnet  # testnet only: wipe to 0 Minds, same id
+node add-responder.js hungry-minds-<suffix>.testnet hm-worker-<suffix>.testnet       # once: let the worker answer thoughts
+node qa-finance.js <wasm> <suffix>                                # money check on a throwaway QA contract
+
+CONTRACT_ID=hungry-minds-<suffix>.testnet WORKER_ID=hm-worker-<suffix>.testnet node index.js   # the brain
+```
+
+Then set `NEXT_PUBLIC_CONTRACT_ID` (or `TESTNET_DEPLOY` in `web/lib/chain.ts`) to the new account.
+
+## Manual path with near-cli
+
 Exact commands to get a live, judge-reproducible demo. `$ACC` is your testnet account.
 
 ## 1. Build the wasm
@@ -41,9 +104,9 @@ No init call is needed — the contract initializes from `Default` on first use.
 ## 4. Hatch a demo Mind and pre-fund its thinking
 
 ```bash
-# hatch (2 NEAR): 1.0 becomes the Mind's food, 0.75 treasury, 0.25 storage reserve
+# hatch (1 NEAR): 0.1 becomes the Mind's food, 0.65 treasury, 0.25 storage reserve
 near call hungry-minds.$ACC hatch_mind '{"name":"Juno"}' \
-  --accountId $ACC --deposit 2
+  --accountId $ACC --deposit 1
 
 # verify it is alive
 near view hungry-minds.$ACC mind_state '{"id":0}'      # -> "full"
@@ -69,7 +132,7 @@ npm install && npm start
 near call hungry-minds.$ACC think '{"id":0,"prompt":"who are you?"}' --accountId $ACC --gas 300000000000000
 near view hungry-minds.$ACC last_thought '{"id":0}'    # -> Juno's reply
 
-# a stranger pays 0.01 to chat (70% feeds Juno, 20% to the owner, 10% treasury)
+# a stranger pays 0.01 to chat (90% to Juno's owner, 10% treasury; Juno spends one thought of her own food)
 near call hungry-minds.$ACC chat '{"id":1,"prompt":"hello"}' --accountId someone.testnet --deposit 0.01 --gas 300000000000000
 
 # feed, claim, drain-to-asleep, reap (demo-window build), sell — see README walkthrough
@@ -84,8 +147,14 @@ Keep the worker's and NEAR AI keys out of git (worker/.gitignore covers `.env`).
 cd web
 cp .env.example .env.local
 #   NEXT_PUBLIC_CONTRACT_ID=hungry-minds.$ACC
+#   CHAT_SERVER_URL=http://127.0.0.1:8788   (the worker's chat server + agent gateway; this is the default)
 npm install && npm run build && npm start
 ```
+
+The site's `/api/chat/*` and `/api/agent/*` routes forward to the worker at `CHAT_SERVER_URL`:
+the off-chain chat (no transaction per message) and connecting an agent need it. Everything
+else the site does is a transaction or a view on the contract, so it works with only the
+contract deployed; the worker answers those on chain wherever it runs.
 
 With `NEXT_PUBLIC_CONTRACT_ID` set, the gallery and Mind pages read the chain over RPC and the
 Connect-wallet button + hatch/feed/talk sign real transactions through NEAR Wallet Selector.

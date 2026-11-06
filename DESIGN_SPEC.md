@@ -1,5 +1,10 @@
 # Hungry Minds — функціональна специфікація для дизайнера
 
+> **Historical planning document (1–2 Nov 2026).** The economy changed on 2026-11-04: whatever
+> others pay to use a Mind goes **90% to the NFT owner, 10% to the protocol, nothing into her
+> food** (the owner feeds her); a Mind sale gives the seller 100%. The current description is
+> [README.md](README.md). / Історичний документ: актуальний опис і економіка — у README.md.
+
 > Це хендофф-документ: **кожен екран, кожна функція, кожен стан, кожен елемент**.
 > Разом із [PRODUCT.md](PRODUCT.md) (що це за продукт) і реальним кодом контракту.
 > Де функція ще не підключена до UI — позначено `[LIVE пізніше]`. 2026-11-01.

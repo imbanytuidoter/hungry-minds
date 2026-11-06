@@ -5,10 +5,17 @@
 // this many chars, so trimming here avoids paying gas for bytes it would truncate anyway.
 const DEFAULT_MAX_REPLY = 1000;
 
-/** Normalize an AI reply: trim surrounding whitespace and clamp to `max` characters,
- *  code-point-safe (so a clamp never splits an emoji / multi-byte char). */
+// Citation / footnote markers some models append ("…rhythm.^1", "[1]", "[^2]", "【3†source】").
+// A Mind's reply has no sources, so they are noise. A bare ^N counts only right after
+// punctuation, so an exponent ("2^10", "x^2") survives. Keep in step with web/app/api/brain.
+const FOOTNOTES = /(?:\s*(?:\[\^?\d+\]|【[^】]*】)|(?<=[.!?,;:)"'”’])\^\d+)(?=(\s*)(\S?))/g;
+// A marker glued between two words ("Hi【3】there") leaves one space; otherwise nothing.
+const dropFootnote = (_m, ws, next) => (next && !ws && !/[.,!?;:)]/.test(next) ? " " : "");
+
+/** Normalize an AI reply: drop footnote markers, trim surrounding whitespace and clamp to
+ *  `max` characters, code-point-safe (so a clamp never splits an emoji / multi-byte char). */
 function cleanReply(raw, max = DEFAULT_MAX_REPLY) {
-  const text = String(raw ?? "").trim();
+  const text = String(raw ?? "").replace(FOOTNOTES, dropFootnote).trim();
   const chars = Array.from(text); // iterate by code point
   return chars.length <= max ? text : chars.slice(0, max).join("");
 }

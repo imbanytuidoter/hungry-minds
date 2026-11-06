@@ -1,5 +1,10 @@
 # Hungry Minds — повний опис продукту
 
+> **Historical planning document (1–2 Nov 2026).** The economy changed on 2026-11-04: whatever
+> others pay to use a Mind goes **90% to the NFT owner, 10% to the protocol, nothing into her
+> food** (the owner feeds her); a Mind sale gives the seller 100%. The current description is
+> [README.md](README.md). / Історичний документ: актуальний опис і економіка — у README.md.
+
 > Статус документа: опис того, що є і що планується. Де щось ще не зроблено —
 > позначено явно (чесність понад усе). Станом на 2026-11-01.
 

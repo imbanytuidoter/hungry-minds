@@ -19,12 +19,13 @@ pub enum HungerState {
 
 /// Derive the hunger state from the Mind's food balance (yoctoNEAR).
 ///
-/// Full ≥ 0.5 NEAR · Content ≥ 0.1 · Hungry ≥ 0.02 · Starving > 0 · Asleep = 0.
+/// Full ≥ 0.08 NEAR · Content ≥ 0.03 · Hungry ≥ 0.01 · Starving > 0 · Asleep = 0.
+/// Scaled to a 0.1 NEAR newborn and feeds of at most 0.1 NEAR.
 /// (`Ghost` is a separate, time-based flag — not derived here.)
 pub fn hunger_state(balance_yocto: u128) -> HungerState {
-    const FULL: u128 = ONE_NEAR / 2; // 0.5 NEAR
-    const CONTENT: u128 = ONE_NEAR / 10; // 0.1 NEAR
-    const HUNGRY: u128 = ONE_NEAR / 50; // 0.02 NEAR
+    const FULL: u128 = ONE_NEAR * 8 / 100; // 0.08 NEAR
+    const CONTENT: u128 = ONE_NEAR * 3 / 100; // 0.03 NEAR
+    const HUNGRY: u128 = ONE_NEAR / 100; // 0.01 NEAR
 
     if balance_yocto >= FULL {
         HungerState::Full
@@ -129,26 +130,27 @@ mod tests {
     }
 
     #[test]
-    fn below_two_hundredths_near_is_starving() {
+    fn below_one_hundredth_near_is_starving() {
         assert_eq!(hunger_state(1), HungerState::Starving);
-        assert_eq!(hunger_state(ONE_NEAR / 100), HungerState::Starving); // 0.01
+        assert_eq!(hunger_state(ONE_NEAR / 200), HungerState::Starving); // 0.005
     }
 
     #[test]
-    fn five_hundredths_near_is_hungry() {
-        assert_eq!(hunger_state(ONE_NEAR / 20), HungerState::Hungry); // 0.05
-        assert_eq!(hunger_state(ONE_NEAR / 50), HungerState::Hungry); // exactly 0.02
+    fn two_hundredths_near_is_hungry() {
+        assert_eq!(hunger_state(ONE_NEAR / 50), HungerState::Hungry); // 0.02
+        assert_eq!(hunger_state(ONE_NEAR / 100), HungerState::Hungry); // exactly 0.01
     }
 
     #[test]
-    fn fifth_of_a_near_is_content() {
-        assert_eq!(hunger_state(ONE_NEAR / 5), HungerState::Content); // 0.2
-        assert_eq!(hunger_state(ONE_NEAR / 10), HungerState::Content); // exactly 0.1
+    fn five_hundredths_near_is_content() {
+        assert_eq!(hunger_state(ONE_NEAR / 20), HungerState::Content); // 0.05
+        assert_eq!(hunger_state(ONE_NEAR * 3 / 100), HungerState::Content); // exactly 0.03
     }
 
     #[test]
-    fn half_a_near_or_more_is_full() {
-        assert_eq!(hunger_state(ONE_NEAR / 2), HungerState::Full); // exactly 0.5
+    fn a_newborns_tenth_of_a_near_or_more_is_full() {
+        assert_eq!(hunger_state(ONE_NEAR / 10), HungerState::Full); // a newborn's 0.1
+        assert_eq!(hunger_state(ONE_NEAR * 8 / 100), HungerState::Full); // exactly 0.08
         assert_eq!(hunger_state(ONE_NEAR), HungerState::Full);
         assert_eq!(hunger_state(ONE_NEAR * 10), HungerState::Full);
     }

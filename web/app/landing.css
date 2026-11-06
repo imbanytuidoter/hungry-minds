@@ -1,0 +1,66 @@
+/* Hungry Minds — landing page. Tokens and motion from the design handoff
+   (design_handoff_hungry_minds/Landing.dc.html). Scoped under .hl. */
+
+.hl {
+  --cream: #fbf3e8;
+  --jungle: #0f3d2a;
+  --jungle-2: #0f4d33;
+  --leaf: #2c5a44;
+  --mint: #a9e6c2;
+  --sun: #ffd84d;
+  --rose: #ff6fa3;
+
+  min-height: 100vh;
+  background: var(--cream);
+  color: var(--jungle);
+  font-family: var(--font-figtree), system-ui, sans-serif;
+  overflow-x: clip;
+  line-height: 1.45;
+}
+.hl a { color: var(--jungle); }
+.hl a:hover { color: #1f7a4d; }
+.hl button { font: inherit; cursor: pointer; }
+.hl button:focus-visible, .hl a:focus-visible { outline: 2.5px solid var(--jungle); outline-offset: 3px; }
+.hl ::selection { background: #bff0d4; }
+.hl h1, .hl h2 { font-family: inherit; margin: 0; }
+
+.hl .h-big { font-weight: 600; font-size: clamp(40px, 5.5vw, 72px); line-height: 1; letter-spacing: -0.04em; }
+.hl .lead { margin: 0; font-size: 18px; line-height: 1.5; color: var(--leaf); }
+.hl .wrap { max-width: 1240px; margin: 0 auto; padding: 96px 32px; }
+.hl .pill-dark {
+  font-weight: 600; font-size: 17px; text-decoration: none; background: var(--jungle-2); color: var(--cream);
+  border-radius: 999px; padding: 15px 28px; box-shadow: 0 10px 24px rgba(15, 77, 51, 0.3); transition: transform 0.2s, box-shadow 0.2s;
+}
+.hl .pill-dark:hover { color: var(--cream); transform: translateY(-2px); box-shadow: 0 12px 26px rgba(15, 77, 51, 0.34); }
+.hl .pill-light {
+  font-weight: 600; font-size: 17px; text-decoration: none; background: rgba(255, 255, 255, 0.7); border: 1.5px solid rgba(15, 61, 42, 0.15);
+  border-radius: 999px; padding: 15px 26px; backdrop-filter: blur(10px);
+}
+.hl .sec { isolation: isolate; overflow: hidden; position: relative; }
+.hl .deco { position: absolute; pointer-events: none; z-index: -1; }
+.hl .reveal { opacity: 0; transform: translateY(40px); }
+.hl .reveal.shown { opacity: 1; transform: none; transition: opacity 0.8s ease var(--d, 0ms), transform 1s cubic-bezier(0.2, 1, 0.3, 1) var(--d, 0ms); }
+.hl .scrub span { display: inline-block; white-space: pre; }
+
+@keyframes hlWhipA { 0% { transform: translateX(0); filter: blur(0); } 40% { transform: translateX(-60%); filter: blur(14px); opacity: 0; } 41% { transform: translateX(60%); } 100% { transform: none; filter: blur(0); opacity: 1; } }
+@keyframes hlWhipB { 0% { transform: translateX(0); filter: blur(0); } 40% { transform: translateX(-60%); filter: blur(14px); opacity: 0; } 41% { transform: translateX(60%); } 100% { transform: none; filter: blur(0); opacity: 1; } }
+@keyframes hlCharIn { 0% { transform: translateY(80%) scale(0.6, 1.3); opacity: 0; filter: blur(8px); } 60% { opacity: 1; filter: blur(0); } 100% { transform: none; opacity: 1; } }
+@keyframes hlBubbleUp { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-34px) scale(1.15); } }
+@keyframes hlSway { 0%, 100% { transform: rotate(-2.5deg); } 50% { transform: rotate(3deg); } }
+@keyframes hlBreathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.035, 0.965); } }
+@keyframes hlJelly { 0%, 100% { border-radius: 56% 44% 52% 48% / 50% 56% 44% 50%; } 33% { border-radius: 48% 52% 44% 56% / 56% 46% 54% 44%; } 66% { border-radius: 52% 48% 58% 42% / 46% 52% 48% 54%; } }
+@keyframes hlBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+@keyframes hlUp { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
+@keyframes hlFloatG { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(8px, -18px); } }
+
+.hl .breathe { animation: hlBreathe 3.8s ease-in-out infinite; transform-origin: 50% 92%; }
+
+@media (max-width: 820px) {
+  .hl .wrap { padding: 72px 18px; }
+  .hl .hl-navlinks { display: none !important; }
+  .hl nav { padding: 14px 18px !important; justify-content: space-between; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hl *, .hl *::before, .hl *::after { animation: none !important; transition: none !important; }
+  .hl .reveal { opacity: 1; transform: none; }
+}

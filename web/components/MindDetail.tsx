@@ -28,7 +28,7 @@ type Line = { who: "you" | "mind" | "system"; text: string; id?: string };
 let lineSeq = 0;
 const nextId = () => `l${lineSeq++}`;
 
-const FEED_MEAL = 0.2; // NEAR; 95% reaches the Mind (economy.rs feed_split)
+const FEED_MEAL = 0.05; // NEAR; 95% reaches the Mind (economy.rs feed_split)
 const CHAT_PRICE = 0.01; // NEAR; a stranger's chat (economy.rs GUEST_PRICE)
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -84,13 +84,13 @@ export default function MindDetail({
   async function feed() {
     if (ghost) return;
     if (live && !connected) {
-      signIn();
+      void signIn().catch(() => {});
       return;
     }
     playFeedJuice();
 
     if (connected && signer) {
-      say({ who: "system", text: `Feeding ${mind.name} a 0.2 NEAR meal…`, id: nextId() });
+      say({ who: "system", text: `Feeding ${mind.name} a ${FEED_MEAL} NEAR meal…`, id: nextId() });
       try {
         await chainFeed(signer, mind.id, FEED_MEAL); // may redirect (browser wallet)
         await refresh();
@@ -103,14 +103,14 @@ export default function MindDetail({
 
     // Preview: mirror the on-chain feed split locally (95% reaches the Mind).
     setBalance((b) => +(b + FEED_MEAL * 0.95).toFixed(4));
-    say({ who: "system", text: `You fed ${mind.name} a 0.2 NEAR meal.`, id: nextId() });
+    say({ who: "system", text: `You fed ${mind.name} a ${FEED_MEAL} NEAR meal.`, id: nextId() });
   }
 
   async function talk() {
     const text = draft.trim();
     if (!text || !awake || ghost) return;
     if (live && !connected) {
-      signIn();
+      void signIn().catch(() => {});
       return;
     }
     setDraft("");
@@ -247,7 +247,7 @@ export default function MindDetail({
 
           <div className="flex" style={{ gap: 10, marginTop: 20, flexWrap: "wrap" }}>
             <button className="btn btn-primary" onClick={feed} disabled={ghost}>
-              Feed a meal — 0.2 NEAR
+              Feed a meal — {FEED_MEAL} NEAR
             </button>
           </div>
           {ghost && (
@@ -302,8 +302,8 @@ export default function MindDetail({
           </h3>
           <ul className="onchain">
             <li>
-              <strong>Let strangers pay to chat.</strong> 70% feeds {mind.name},
-              20% is yours to <em>claim</em>, 10% to the treasury.
+              <strong>Let strangers pay to chat.</strong> 90% is yours to <em>claim</em>,
+              10% to the treasury. Her replies cost her food, so keep {mind.name} fed.
             </li>
             <li>
               <strong>Claim your earnings.</strong> Only your guest-chat cut —

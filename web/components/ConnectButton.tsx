@@ -33,7 +33,7 @@ export default function ConnectButton() {
     <button
       className="btn btn-ghost"
       style={{ padding: "9px 14px" }}
-      onClick={signIn}
+      onClick={() => void signIn().catch(() => {})}
     >
       Connect wallet
     </button>
