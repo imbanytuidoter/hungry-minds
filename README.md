@@ -269,7 +269,7 @@ documented publicly yet ([market.near.ai/list-agent](https://market.near.ai/list
   Open-Meteo and BigDataCloud (the dome's weather), radio streams credited in the player
   (NoCopyrightSounds and others), Pollinations as a fallback model when no NEAR AI key is set.
 - **Templates:** none; the app was not started from a starter template.
-- **AI-generated code:** most of the code was written with an AI coding assistant (Claude Code),
+- **AI-generated code:** most of the code was written with an AI coding assistant,
   directed, reviewed and tested by the author; the design follows a UI handoff made for this
   project.
 
