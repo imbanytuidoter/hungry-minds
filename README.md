@@ -275,7 +275,7 @@ documented publicly yet ([market.near.ai/list-agent](https://market.near.ai/list
 
 ## Team
 
-Built for NEAR HACKATHON 2026 by Serhii Vasylevskyi. The team's other project is NEAR-pedia,
+Built for NEAR HACKATHON 2026 by imbanytuidoter. The team's other project is NEAR-pedia,
 an independent project with its own repository; the two share no code (Q-015).
 
 ## License
