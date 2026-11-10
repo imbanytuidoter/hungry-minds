@@ -241,24 +241,6 @@ const tok = (n) => getComputedStyle(document.documentElement).getPropertyValue(n
   const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
 
 
-  function renderMinds(d) {
-    const ul = $("#minds");
-    if (!d.minds.length) { ul.innerHTML = `<li class="minds-note">No Mind has hatched yet</li>`; return; }
-    const ticks = [0.01, 0.03, 0.08].map((v) => `<b style="left:${((v / FIRST_FOOD) * 100).toFixed(1)}%"></b>`).join("");
-    ul.innerHTML = d.minds.map((m) => {
-      const ghost = m.ghost || m.state === "ghost";
-      const art = m.svg ? (() => { try { return svgUri(cleanArt(decodeSvg(m.svg))); } catch (e) { return ""; } })() : "";
-      const w = ghost ? 0 : clamp(m.balance / FIRST_FOOD) * 100;
-      return `<li class="mind-row">
-        <span class="well">${art ? `<img src="${art}" alt="${esc(m.name)}, her picture from the contract">` : ""}</span>
-        <span><span class="mr-name">${esc(m.name)}</span>
-          <span class="mr-sub">${ghost ? "a ghost" : esc(m.state)} · ${fmtInt(m.thoughts)} ${m.thoughts === 1 ? "thought" : "thoughts"}</span>
-          <span class="foodbar" aria-hidden="true"><i style="--w:${w.toFixed(1)}%"></i>${ticks}</span></span>
-        <span class="mr-food"><span class="num">${ghost ? "—" : fmtFood(m.balance)}</span><small>NEAR of food</small></span>
-      </li>`;
-    }).join("");
-  }
-
   /* ---------------- chapter reveals ---------------- */
   const chapters = $$(".ch");
   const io = new IntersectionObserver((entries) => { for (const e of entries) if (e.isIntersecting) e.target.classList.add("in"); }, { threshold: 0.18 });

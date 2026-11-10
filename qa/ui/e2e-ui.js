@@ -252,7 +252,7 @@ module.exports = async (b, [role, account, name = "UiQa"]) => {
     out.push("  " + (await b.click("/^Shop$/")));
     await b.until(`document.body.innerText.includes(${JSON.stringify(name)})`, 20000);
     // the listing shows her condition as the chain has it now
-    const pct = Math.min(100, Math.round((N((await view("get_mind", { id: target.id })).balance) / 0.0475) * 100));
+    const pct = Math.min(100, Math.round((N(await view("live_balance", { id: target.id })) / 0.0475) * 100)); // the food she has now, idle burn included
     await b.until(`[...document.querySelectorAll('.hm-condition')].some(x => x.closest('.card') && x.closest('.card').innerText.includes(${JSON.stringify(name)}))`, 20000);
     const cond = await b.js(`(() => { const c = [...document.querySelectorAll('.hm-condition')].find(x => x.closest('.card') && x.closest('.card').innerText.includes(${JSON.stringify(name)})); return c ? c.innerText.replace(/\\s+/g, ' ') : ''; })()`);
     ok(cond.includes(`food ${pct}%`) && /thoughts/.test(cond) && /(agent|no agent)/.test(cond), "the listing shows her state, food, agent and services", cond);

@@ -21,7 +21,7 @@
 
 const DEFAULT_RPC = { testnet: "https://near-testnet.drpc.org", mainnet: "https://free.rpc.fastnear.com" };
 
-async function view(rpc, contractId, method, args) {
+async function view(rpc, contractId, method, args, finality = "final") {
   const r = await fetch(rpc, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -29,7 +29,7 @@ async function view(rpc, contractId, method, args) {
       jsonrpc: "2.0",
       id: 1,
       method: "query",
-      params: { request_type: "call_function", finality: "final", account_id: contractId, method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") },
+      params: { request_type: "call_function", finality, account_id: contractId, method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") },
     }),
   });
   const j = await r.json();
@@ -46,7 +46,9 @@ async function mindOwner({ contractId, mindId, network = "testnet", rpc }) {
 /**
  * A guard for an agent that belongs to one Mind.
  * check(payload) → { ok: true, job } when the payload's job was ordered on chain from this Mind,
- * else { ok: false, reason }. Chat messages (no job id) pass only when mind_id matches.
+ * else { ok: false, reason }. Chat messages (no job id) pass only when mind_id matches; that
+ * field comes from the caller, so a chat message is not proven: pass `allowChat: false` if your
+ * agent should only ever do paid, ordered work.
  */
 function mindGuard({ contractId, mindId, network = "testnet", rpc, allowChat = true }) {
   if (!contractId || !Number.isInteger(mindId)) throw new Error("mindGuard needs contractId and an integer mindId");
@@ -59,7 +61,13 @@ function mindGuard({ contractId, mindId, network = "testnet", rpc, allowChat = t
       if (payload.job_id === undefined || payload.job_id === null) {
         return allowChat ? { ok: true, job: null } : { ok: false, reason: "this agent only takes ordered jobs" };
       }
-      const job = await view(url, contractId, "get_job", { job_id: Number(payload.job_id) });
+      // The gateway sees a job as soon as it is ordered (optimistic), a final read may lag by a
+      // block or two: read optimistic, and once more after a moment if it is not there yet.
+      let job = await view(url, contractId, "get_job", { job_id: Number(payload.job_id) }, "optimistic");
+      if (!job) {
+        await new Promise((r) => setTimeout(r, 2000));
+        job = await view(url, contractId, "get_job", { job_id: Number(payload.job_id) }, "optimistic");
+      }
       if (!job) return { ok: false, reason: `job ${payload.job_id} is not on chain` };
       if (Number(job.mind_id) !== mindId) return { ok: false, reason: `job ${payload.job_id} was ordered from another Mind` };
       if (job.status !== "Open") return { ok: false, reason: `job ${payload.job_id} is ${String(job.status).toLowerCase()}` };

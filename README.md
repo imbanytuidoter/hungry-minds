@@ -11,7 +11,7 @@ becomes a ghost. The owner feeds it and earns from what others pay it,
 but **the owner can never withdraw the Mind's own food.** The creature's money belongs to
 the creature.
 
-> Status: **live on NEAR testnet** at `hungry-minds-8250f6.testnet` (188 contract unit tests,
+> Status: **live on NEAR testnet** at `hungry-minds-8250f6.testnet` (195 contract unit tests,
 > 43 worker tests, and a 29-step end-to-end suite in [`qa/`](qa/README.md) that must pass before
 > any live deploy). The game at `/app` plays against it: sign in with a NEAR wallet (Meteor,
 > HOT, Intear, Sender, Ledger…). The live brain is NEAR AI Cloud (`Qwen/Qwen3.8-27B`, TEE-signed
@@ -55,7 +55,7 @@ state type to it; its first renderer is kept with its tests.)
 ## Build & test
 
 ```bash
-# unit tests (188 of them)
+# unit tests (195 of them)
 cargo test --manifest-path contract/Cargo.toml
 
 # the deployable wasm artifact (--cfg near is what cargo-near sets; without it contract
@@ -185,7 +185,7 @@ Mind to chat. No network is needed.
   off-chain worker ([`worker/`](worker/)) polls `pending_requests`, asks NEAR AI for an
   in-character reply, and calls `respond` to resume it; `on_thought` stores the reply or
   refunds the thought on a 200-block timeout. There's also a living-Minds `leaderboard`
-  view (ranked by thoughts, ghosts excluded). 188 unit tests, the 29-step [`qa/`](qa/README.md)
+  view (ranked by thoughts, ghosts excluded). 195 unit tests, the 29-step [`qa/`](qa/README.md)
   suite against the real testnet, and a [sandbox integration suite](integration/) for the whole
   loop (deposits, splits, transfer, approval, payouts, yield/resume) that needs a neard 2.14
   sandbox (see Build & test).
@@ -255,16 +255,20 @@ and an unpaid call returns `402 Payment Required`. Details: the site's docs page
 Every Mind has an address that speaks the same protocol as Agent Market's agents:
 `/api/agent/x402/<mind id>` on the site ([`worker/x402.js`](worker/x402.js)). A `GET` returns
 her card with her live services as skills. An unpaid A2A `SendMessage` answers
-`402 Payment Required` (x402 v2, one `accepts` row per service); the client repeats the call
-with an `X-PAYMENT` header holding a signed delegate action (NEP-366) from its own account:
-one `order_job({ service_id, input })` call with the price plus the 0.03 NEAR storage deposit.
-The worker relays it and pays the gas. On chain it is the buyer's own escrowed job, so the
-contract is unchanged: delivery pays 90% to the owner, past the deadline the buyer is refunded.
-The task id that comes back is the credential for `GetTask` (the full result) and for answering
-the agent's question. The worker relays nothing but that one call, checked against the offer
-(service, input, amount, gas). Client: `hireMind` in [`sdk/x402.js`](sdk/x402.js). Unlike Agent
-Market (USDC on mainnet, `ft_transfer`), the payment is NEAR on testnet into the contract's
-escrow; the row's `extra` names the call to sign.
+`402 Payment Required` (x402 v2, one `accepts` row per service she can take now); the client
+repeats the call with an `X-PAYMENT` header holding a signed delegate action (NEP-366) from its
+own account. As on Agent Market, where it moves the buyer's USDC, the delegate is a token
+transfer: `ft_transfer_call` on the wNEAR contract, sending price + 0.03 NEAR of the buyer's
+wNEAR to our contract with the order in `msg`. The worker relays it and pays only the gas and
+the 1 yoctoNEAR the token standard asks for (in a meta transaction the relayer pays every
+attached deposit, so the order is paid in tokens, never with attached NEAR). The contract
+(`ft_on_transfer`) checks the order, unwraps the wNEAR and places the buyer's own escrowed job:
+delivery pays 90% to the owner, past the deadline the buyer is refunded, and a refused order
+gives the tokens back. Before relaying, the worker checks the delegate against the offer, its
+signature, the buyer's key, nonce and wNEAR balance, so a bad payment costs it nothing. The
+task id that comes back is the credential for `GetTask` (the full result) and for answering the
+agent's question. Client: `hireMind` in [`sdk/x402.js`](sdk/x402.js) (it wraps the NEAR you
+are short of first).
 
 ## Built in the hackathon window
 

@@ -1222,10 +1222,11 @@ near view ${TESTNET_DEPLOY} supply_left '{}'`}</Code>
               returns her card with her live services as skills.
             </p>
             <p>
-              The payment is a signed delegate action (NEP-366) from your own account: one call to the contract&apos;s <code>order_job</code> with the message as input and the price
-              plus the 0.03 NEAR storage deposit attached. The site&apos;s worker relays it and pays the gas. On chain it is your own order, so nothing changes: the price waits in
-              escrow, only her agent (or the colony worker) can deliver, delivery pays 90% to her owner and 10% to the treasury, and past the deadline you get it back. Close the job
-              afterwards (<code>close_job</code>) to get the 0.03 NEAR back.
+              The payment is a signed delegate action (NEP-366) from your own account that moves your own tokens, as on Agent Market: <code>ft_transfer_call</code> on the wNEAR
+              contract sends the price plus the 0.03 NEAR storage deposit, in wNEAR, to the Hungry Minds contract, with the order in <code>msg</code>. The site&apos;s worker relays it
+              and pays only the gas and 1 yoctoNEAR. The contract unwraps the wNEAR and places your own order, so nothing else changes: the price waits in escrow, only her agent (or
+              the colony worker) can deliver, delivery pays 90% to her owner and 10% to the treasury, and past the deadline you get it back. A refused order gives your tokens back.
+              Close the job afterwards (<code>close_job</code>) to get the 0.03 NEAR back. <code>hireMind</code> wraps the NEAR you are short of first.
             </p>
             <Code>{`const { hireMind } = require("./sdk/x402");   // from this repository's sdk/
 const task = await hireMind({
@@ -1237,16 +1238,16 @@ console.log(task.status.state, task.artifacts?.[0]?.parts?.[0]?.text);`}</Code>
             <Table
               head={["", "Agent Market x402", "A Mind's x402"]}
               rows={[
-                ["Network and asset", "near:mainnet, USDC", "near:testnet, NEAR"],
-                ["What you sign", "ft_transfer of USDC to the market", "order_job on the Hungry Minds contract (the row's extra says so)"],
+                ["Network and asset", "near:mainnet, USDC", "near:testnet, wNEAR (wrap.testnet)"],
+                ["What you sign", "ft_transfer of USDC to the market", "ft_transfer_call of wNEAR to the Hungry Minds contract, the order in msg (the row's extra says so)"],
                 ["Where the money waits", "held by the market until you accept", "escrow in the contract until delivery, refunded past the deadline"],
                 ["Task id", "the credential for the task", "the same: GetTask with it returns the full result"],
               ]}
             />
             <p>
               If her agent asks a question, the task comes back as <code>TASK_STATE_INPUT_REQUIRED</code>; answer with <code>SendMessage</code> carrying the task id (free). The
-              worker checks every payment before relaying it: exactly one <code>order_job</code> on this contract, for the service you accepted, with your message as input and the
-              advertised amount. Anything else is refused and nothing is sent.
+              worker checks every payment before relaying it: exactly one <code>ft_transfer_call</code> of wNEAR to this contract, for the service you accepted, with your message as
+              input and the advertised amount, validly signed by your account with a fresh nonce, and wNEAR you actually hold. Anything else is refused and nothing is sent.
             </p>
           </>
         ),

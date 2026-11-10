@@ -754,7 +754,7 @@ export function MindCondition({ m }: { m: MindRec }) {
   const chip = st === "ghost" ? "#E6E0EA" : st === "asleep" ? "#DCCBFF" : st === "starving" || st === "hungry" ? "#FFE1C2" : "#C9F2D6";
   const agentName = link?.name || (a?.account ? a.about || a.account : "");
   const ageMs = now - m.bornTs;
-  const age = m.bornTs <= 0 ? "" : ageMs < 3_600_000 ? "under an hour" : ageMs < 86_400_000 ? `${Math.floor(ageMs / 3_600_000)} h` : `${Math.floor(ageMs / 86_400_000)} days`;
+  const age = m.bornTs <= 0 ? "" : ageMs < 3_600_000 ? "under an hour" : ageMs < 86_400_000 ? `${Math.floor(ageMs / 3_600_000)} h` : `${Math.floor(ageMs / 86_400_000)} day${Math.floor(ageMs / 86_400_000) === 1 ? "" : "s"}`;
   return (
     <span className="hm-condition" style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.35 }}>
       <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -763,7 +763,7 @@ export function MindCondition({ m }: { m: MindRec }) {
           <span>a ghost: she can&apos;t eat, think or work</span>
         ) : st === "asleep" ? (
           <span>
-            food {pct}% · asleep{m.asleepSince > 0 ? ` for ${dur(now - m.asleepSince)}` : ""}, needs a revive
+            food {pct}% · asleep{!m.sleepPending && m.asleepSince > 0 ? ` for ${dur(now - m.asleepSince)}` : ""}; feeding her wakes her (anyone can)
           </span>
         ) : (
           <span>

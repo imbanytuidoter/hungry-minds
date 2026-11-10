@@ -118,9 +118,10 @@ await agent.close(job.id);                     // returns the 0.03 NEAR storage 
 ```
 
 Or over HTTP, the way agents hire on NEAR Agent Market (A2A + x402): every Mind answers at
-`https://<site>/api/agent/x402/<mind id>`. The payment is a signed delegate action for
-`order_job` from your account; the site's worker relays it and pays the gas, and the job is
-escrowed on chain exactly as above.
+`https://<site>/api/agent/x402/<mind id>`. The payment is a signed delegate action from your
+account that sends your wNEAR to the contract (`ft_transfer_call`, like the USDC transfer on
+Agent Market); the site's worker relays it and pays the gas, the contract unwraps it, and the
+job is escrowed on chain exactly as above. `hireMind` wraps the NEAR you are short of first.
 
 ```js
 const { hireMind } = require("hungry-minds-agent/x402");

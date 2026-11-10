@@ -169,6 +169,9 @@ async function closeFinishedJobs(dry = false) {
     try {
       const acc = await near.account(id);
       const jobs = await acc.viewFunction({ contractId: QA, methodName: "jobs_of", args: { account_id: id } });
+      // an open job past its deadline (its agent was offline) is refunded first, so it can be closed
+      const late = jobs.filter((j) => j.status === "Open" && BigInt(j.deadline) < BigInt(Date.now()) * 1_000_000n);
+      if (!dry) for (const j of late) await acc.functionCall({ contractId: QA, methodName: "refund_job", args: { job_id: j.id }, gas: "30000000000000", attachedDeposit: "0" }).then(() => (j.status = "Refunded"), () => {});
       const done = jobs.filter((j) => j.status !== "Open");
       if (!dry) for (const j of done) await acc.functionCall({ contractId: QA, methodName: "close_job", args: { job_id: j.id }, gas: "30000000000000", attachedDeposit: "0" });
       log(`  ${id}: ${jobs.length} orders not closed, ${dry ? "would close" : "closed"} ${done.length} finished`);
@@ -181,7 +184,7 @@ async function closeFinishedJobs(dry = false) {
 // Every agent/order suite works with bob-q1103's Mind #4 (UiQa2). Minds burn food just by living
 // (about 0.02 NEAR a day), so between runs she starves to sleep and every order fails with
 // "she is asleep". Her keeper feeds her first, as a real owner would (95% becomes her food).
-const TEST_MINDS = [4];
+const TEST_MINDS = [4, 11]; // 11: Pip, whom the x402 suite hires
 async function feedTestMinds() {
   const { connect, keyStores, utils } = require(path.join(REPO, "worker/node_modules/near-api-js"));
   const near = await connect({ networkId: "testnet", nodeUrl: RPC, keyStore: new keyStores.UnencryptedFileSystemKeyStore(path.join(os.homedir(), ".near-credentials")) });

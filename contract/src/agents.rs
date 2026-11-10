@@ -37,6 +37,29 @@ const SEC: u64 = 1_000_000_000;
 /// Jobs that may wait for delivery at once (bounds the open list a view or call reads).
 const MAX_OPEN_JOBS: usize = 1_000;
 
+/// The wNEAR contract whose tokens pay for jobs through `ft_transfer_call` (x402).
+pub(crate) fn wrap_account() -> AccountId {
+    let id = if env::current_account_id().as_str().ends_with(".testnet") { "wrap.testnet" } else { "wrap.near" };
+    id.parse().unwrap()
+}
+const GAS_FOR_NEAR_WITHDRAW: Gas = Gas::from_tgas(10);
+const GAS_FOR_WNEAR_ORDER: Gas = Gas::from_tgas(30);
+
+/// What `ft_transfer_call`'s `msg` carries for a job.
+#[derive(near_sdk::serde::Deserialize)]
+#[serde(crate = "near_sdk::serde")]
+struct OrderMsg {
+    service_id: u64,
+    input: String,
+}
+
+/// wNEAR (the w-near contract): turn tokens held by this contract back into NEAR.
+#[allow(dead_code)] // the #[ext_contract] macro consumes this to generate ext_wnear
+#[ext_contract(ext_wnear)]
+trait WNear {
+    fn near_withdraw(&mut self, amount: U128);
+}
+
 fn agents() -> LookupMap<u64, AgentInfo> {
     LookupMap::new(b"a".to_vec())
 }
@@ -214,6 +237,97 @@ impl Contract {
     }
 }
 
+impl Contract {
+    /// Every condition an order must meet, without placing it: the service and its Mind, the
+    /// input (and its form), the price, the buyer's open orders and the job queue. Returns the
+    /// service and the price to hold in escrow.
+    pub(crate) fn order_checks(&mut self, buyer: &AccountId, service_id: u64, input: &str, paid: u128) -> Result<(Service, u128), String> {
+        let s = self.colony.services.get(&service_id).cloned().ok_or("no such service")?;
+        if !s.live {
+            return Err("this service is paused".into());
+        }
+        if needs_agent(s.category) && !has_agent(s.mind_id) {
+            return Err("this service needs her agent, and none is plugged in right now".into());
+        }
+        if input.len() > MAX_JOB_INPUT {
+            return Err("input must be at most 1000 bytes".into());
+        }
+        if let Some(schema) = input_schemas_map().get(&service_id) {
+            // A service with a form takes JSON with the form's required fields.
+            let v: near_sdk::serde_json::Value = near_sdk::serde_json::from_str(input).map_err(|_| "this service takes its form as JSON input".to_string())?;
+            for field in check_schema(schema) {
+                if !v.get(&field).is_some_and(|x| !x.is_null() && x.as_str() != Some("")) {
+                    return Err(format!("missing field: {field}"));
+                }
+            }
+        }
+        self.settle_metabolism(s.mind_id, env::block_timestamp());
+        let mind = self.minds.get(&s.mind_id).ok_or("no such Mind")?;
+        if mind.ghost {
+            return Err("a ghost takes no jobs".into());
+        }
+        // Work costs her food: a hungry, sleeping Mind takes no jobs until someone feeds her.
+        if mind.asleep_since != 0 || mind.balance.as_yoctonear() < self.thought_cost {
+            return Err("she is asleep: feed her to wake her (anyone can)".into());
+        }
+        let price = s.price.as_yoctonear().max(self.guest_min_price);
+        if paid < price + JOB_DEPOSIT {
+            return Err(format!("attach the price plus {} yoctoNEAR storage deposit", JOB_DEPOSIT));
+        }
+        // A buyer's list holds only jobs not yet closed (close_job removes them); a full list (50)
+        // refuses new orders, so no 0.03 NEAR deposit is ever stranded.
+        if buyer_jobs().get(buyer).map_or(0, |l| l.len()) >= MAX_BUYER_JOBS {
+            return Err("you have 50 orders not yet closed: close finished ones in My orders first".into());
+        }
+        if open_ids().len() >= MAX_OPEN_JOBS {
+            return Err("the job queue is full, try again later".into());
+        }
+        Ok((s, price))
+    }
+
+    /// Place an order that passed `order_checks`: escrow the price, refund anything above
+    /// price + deposit, and record the job. Returns its id.
+    pub(crate) fn place_order(&mut self, buyer: AccountId, s: Service, input: String, paid: u128, price: u128) -> u64 {
+        let now = env::block_timestamp();
+        let service_id = s.id;
+        let keeper = self.minds.get(&s.mind_id).map(|m| m.owner.clone()).unwrap_or_else(|| env::panic_str("no such Mind"));
+        if paid > price + JOB_DEPOSIT {
+            let _ = Promise::new(buyer.clone()).transfer(NearToken::from_yoctonear(paid - price - JOB_DEPOSIT));
+        }
+        let terms = self.service_terms(service_id);
+        let mut counter = job_counter();
+        let id = counter.get(&0).copied().unwrap_or(0);
+        counter.insert(0, id + 1);
+        jobs().insert(
+            id,
+            Job {
+                id,
+                service_id,
+                mind_id: s.mind_id,
+                buyer: buyer.clone(),
+                input,
+                escrow: NearToken::from_yoctonear(price),
+                deposit: NearToken::from_yoctonear(JOB_DEPOSIT),
+                keeper,
+                created: now,
+                deadline: now + terms.sla_secs as u64 * SEC,
+                status: JobStatus::Open,
+                result: None,
+                delivered_at: 0,
+                delivered_by: None,
+                rating: 0,
+            },
+        );
+        add_open(id);
+        let mut mine = buyer_jobs();
+        let mut list = mine.get(&buyer).cloned().unwrap_or_default();
+        list.push(id);
+        mine.insert(buyer.clone(), list);
+        env::log_str(&format!("job_ordered id={id} service={service_id} mind={} buyer={buyer} price={price}", s.mind_id));
+        id
+    }
+}
+
 #[near]
 impl Contract {
     // ── agents ────────────────────────────────────────────────────────────────
@@ -344,68 +458,58 @@ impl Contract {
     /// when you close the job); anything above that is refunded. Returns the job id.
     #[payable]
     pub fn order_job(&mut self, service_id: u64, input: String) -> u64 {
-        let s = self.colony.services.get(&service_id).unwrap_or_else(|| env::panic_str("no such service")).clone();
-        require!(s.live, "this service is paused");
-        require!(!needs_agent(s.category) || has_agent(s.mind_id), "this service needs her agent, and none is plugged in right now");
-        require!(input.len() <= MAX_JOB_INPUT, "input must be at most 1000 bytes");
-        if let Some(schema) = input_schemas_map().get(&service_id) {
-            // A service with a form takes JSON with the form's required fields.
-            let v: near_sdk::serde_json::Value = near_sdk::serde_json::from_str(&input).unwrap_or_else(|_| env::panic_str("this service takes its form as JSON input"));
-            for field in check_schema(schema) {
-                require!(v.get(&field).is_some_and(|x| !x.is_null() && x.as_str() != Some("")), format!("missing field: {field}"));
+        let buyer = env::predecessor_account_id();
+        let paid = env::attached_deposit().as_yoctonear();
+        let (s, price) = self.order_checks(&buyer, service_id, &input, paid).unwrap_or_else(|e| env::panic_str(&e));
+        self.place_order(buyer, s, input, paid, price)
+    }
+
+    /// Pay for a job with wNEAR (NEP-141 `ft_transfer_call` on the wNEAR contract, with
+    /// `msg` = `{"service_id": N, "input": "..."}` and `amount` = price + 0.03 NEAR). This is
+    /// how an agent pays through a relayer (x402, worker/x402.js): the buyer's own tokens move,
+    /// the relayer only pays gas. The contract unwraps them to NEAR and places the same
+    /// escrowed job, for the buyer. A refused order returns the tokens (or, after the unwrap, the
+    /// NEAR) to the buyer.
+    pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> PromiseOrValue<U128> {
+        require!(env::predecessor_account_id() == wrap_account(), "only wNEAR pays for jobs");
+        let o: OrderMsg = match near_sdk::serde_json::from_str(&msg) {
+            Ok(o) => o,
+            Err(_) => {
+                env::log_str(&format!("job_order_refused buyer={sender_id} reason=msg must be {{\"service_id\":N,\"input\":\"...\"}}"));
+                return PromiseOrValue::Value(amount);
+            }
+        };
+        if let Err(e) = self.order_checks(&sender_id, o.service_id, &o.input, amount.0) {
+            env::log_str(&format!("job_order_refused buyer={sender_id} reason={e}"));
+            return PromiseOrValue::Value(amount);
+        }
+        ext_wnear::ext(wrap_account())
+            .with_attached_deposit(NearToken::from_yoctonear(1))
+            .with_static_gas(GAS_FOR_NEAR_WITHDRAW)
+            .near_withdraw(amount)
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_WNEAR_ORDER).on_wnear_unwrapped(sender_id, o.service_id, o.input, amount))
+            .into()
+    }
+
+    /// After the unwrap: place the order (the checks run again, state may have moved). The
+    /// value returned is the wNEAR the token contract should give back: all of it if the unwrap
+    /// failed, none once it is NEAR here (a refused order is then refunded in NEAR).
+    #[private]
+    pub fn on_wnear_unwrapped(&mut self, buyer: AccountId, service_id: u64, input: String, amount: U128, #[callback_result] unwrapped: Result<(), PromiseError>) -> U128 {
+        if unwrapped.is_err() {
+            env::log_str(&format!("job_order_refused buyer={buyer} reason=the wNEAR could not be unwrapped"));
+            return amount;
+        }
+        match self.order_checks(&buyer, service_id, &input, amount.0) {
+            Ok((s, price)) => {
+                self.place_order(buyer, s, input, amount.0, price);
+            }
+            Err(e) => {
+                env::log_str(&format!("job_order_refused buyer={buyer} reason={e}"));
+                let _ = Promise::new(buyer).transfer(NearToken::from_yoctonear(amount.0));
             }
         }
-        let now = env::block_timestamp();
-        self.settle_metabolism(s.mind_id, now);
-        let mind = self.minds.get(&s.mind_id).unwrap_or_else(|| env::panic_str("no such Mind"));
-        require!(!mind.ghost, "a ghost takes no jobs");
-        // Work costs her food: a hungry, sleeping Mind takes no jobs until someone feeds her.
-        require!(mind.asleep_since == 0 && mind.balance.as_yoctonear() >= self.thought_cost, "she is asleep: feed her to wake her (anyone can)");
-        let keeper = mind.owner.clone();
-        let price = s.price.as_yoctonear().max(self.guest_min_price);
-        let paid = env::attached_deposit().as_yoctonear();
-        require!(paid >= price + JOB_DEPOSIT, format!("attach the price plus {} yoctoNEAR storage deposit", JOB_DEPOSIT));
-        let buyer = env::predecessor_account_id();
-        // A buyer's list holds only jobs not yet closed (close_job removes them); a full list (50)
-        // refuses new orders, so no 0.03 NEAR deposit is ever stranded.
-        require!(
-            buyer_jobs().get(&buyer).map_or(0, |l| l.len()) < MAX_BUYER_JOBS,
-            "you have 50 orders not yet closed: close finished ones in My orders first"
-        );
-        if paid > price + JOB_DEPOSIT {
-            let _ = Promise::new(buyer.clone()).transfer(NearToken::from_yoctonear(paid - price - JOB_DEPOSIT));
-        }
-        let terms = self.service_terms(service_id);
-        let mut counter = job_counter();
-        let id = counter.get(&0).copied().unwrap_or(0);
-        counter.insert(0, id + 1);
-        jobs().insert(
-            id,
-            Job {
-                id,
-                service_id,
-                mind_id: s.mind_id,
-                buyer: buyer.clone(),
-                input,
-                escrow: NearToken::from_yoctonear(price),
-                deposit: NearToken::from_yoctonear(JOB_DEPOSIT),
-                keeper,
-                created: now,
-                deadline: now + terms.sla_secs as u64 * SEC,
-                status: JobStatus::Open,
-                result: None,
-                delivered_at: 0,
-                delivered_by: None,
-                rating: 0,
-            },
-        );
-        add_open(id);
-        let mut mine = buyer_jobs();
-        let mut list = mine.get(&buyer).cloned().unwrap_or_default();
-        list.push(id);
-        mine.insert(buyer.clone(), list);
-        env::log_str(&format!("job_ordered id={id} service={service_id} mind={} buyer={buyer} price={price}", s.mind_id));
-        id
+        U128(0)
     }
 
     /// The Mind's agent (or, for a Mind with no agent, an approved worker) delivers a job's
@@ -697,6 +801,80 @@ mod tests {
         order(&mut c, T0);
     }
 
+    // ── paying with wNEAR (ft_transfer_call, the x402 path) ──
+
+    const ORDER: &str = r#"{"service_id":0,"input":"check carol.near"}"#;
+    fn from_wrap() {
+        at("wrap.near", 0, T0); // tests run as hm.near, so the wNEAR contract is wrap.near
+    }
+    fn returned(v: PromiseOrValue<U128>) -> Option<u128> {
+        match v {
+            PromiseOrValue::Value(u) => Some(u.0),
+            PromiseOrValue::Promise(_) => None,
+        }
+    }
+    /// The callback after near_withdraw, with the unwrap's outcome.
+    fn unwrapped(c: &mut Contract, ok: bool, amount: u128) -> u128 {
+        testing_env!(
+            VMContextBuilder::new().predecessor_account_id("hm.near".parse().unwrap()).current_account_id("hm.near".parse().unwrap()).block_timestamp(T0).build(),
+            near_sdk::test_vm_config(),
+            near_sdk::RuntimeFeesConfig::test(),
+            Default::default(),
+            vec![if ok { near_sdk::PromiseResult::Successful(vec![]) } else { near_sdk::PromiseResult::Failed }]
+        );
+        c.on_wnear_unwrapped("carol.near".parse().unwrap(), 0, "check carol.near".into(), U128(amount), if ok { Ok(()) } else { Err(PromiseError::Failed) }).0
+    }
+
+    #[test]
+    #[should_panic(expected = "only wNEAR pays for jobs")]
+    fn only_wnear_can_pay_through_ft_transfer_call() {
+        let mut c = shop();
+        at("fake-token.near", 0, T0);
+        let _ = c.ft_on_transfer("carol.near".parse().unwrap(), U128(30 * MILLI + JOB_DEPOSIT), ORDER.into());
+    }
+
+    #[test]
+    fn a_refused_wnear_order_returns_every_token() {
+        let mut c = shop();
+        from_wrap();
+        assert_eq!(returned(c.ft_on_transfer("carol.near".parse().unwrap(), U128(30 * MILLI + JOB_DEPOSIT), "not json".into())), Some(30 * MILLI + JOB_DEPOSIT));
+        from_wrap();
+        assert_eq!(returned(c.ft_on_transfer("carol.near".parse().unwrap(), U128(30 * MILLI), ORDER.into())), Some(30 * MILLI), "too little: price + deposit");
+        from_wrap();
+        assert_eq!(returned(c.ft_on_transfer("carol.near".parse().unwrap(), U128(30 * MILLI + JOB_DEPOSIT), r#"{"service_id":9,"input":"x"}"#.into())), Some(30 * MILLI + JOB_DEPOSIT));
+        assert!(c.get_job(0).is_none(), "no job was placed");
+    }
+
+    #[test]
+    fn a_good_wnear_order_unwraps_first_then_places_the_buyers_job() {
+        let mut c = shop();
+        from_wrap();
+        assert_eq!(returned(c.ft_on_transfer("carol.near".parse().unwrap(), U128(30 * MILLI + JOB_DEPOSIT), ORDER.into())), None, "a promise: near_withdraw, then the order");
+        assert!(c.get_job(0).is_none(), "nothing is placed before the NEAR is here");
+        assert_eq!(unwrapped(&mut c, true, 30 * MILLI + JOB_DEPOSIT), 0, "every token was used");
+        let j = c.get_job(0).unwrap();
+        assert_eq!(j.buyer.as_str(), "carol.near");
+        assert_eq!(j.escrow.as_yoctonear(), 30 * MILLI);
+        assert_eq!(j.status, JobStatus::Open);
+    }
+
+    #[test]
+    fn a_failed_unwrap_gives_the_tokens_back() {
+        let mut c = shop();
+        assert_eq!(unwrapped(&mut c, false, 30 * MILLI + JOB_DEPOSIT), 30 * MILLI + JOB_DEPOSIT);
+        assert!(c.get_job(0).is_none());
+    }
+
+    #[test]
+    fn an_order_refused_after_the_unwrap_is_refunded_in_near() {
+        let mut c = shop();
+        at("alice.near", 0, T0);
+        c.set_service_live(0, false); // paused between the transfer and the unwrap
+        assert_eq!(unwrapped(&mut c, true, 30 * MILLI + JOB_DEPOSIT), 0, "the tokens are NEAR now");
+        assert!(c.get_job(0).is_none());
+        assert!(near_sdk::test_utils::get_logs().iter().any(|l| l.contains("job_order_refused buyer=carol.near reason=this service is paused")));
+    }
+
     #[test]
     fn the_buyer_rates_once() {
         let mut c = shop();
@@ -770,6 +948,43 @@ mod tests {
         at("alice.near", 1, T0);
         c.nft_transfer("bob.near".parse().unwrap(), "0".into(), None, None);
         // otherwise bot.alice.near would keep delivering her jobs and earning from her food
+        assert!(c.agent_of(0).is_none());
+    }
+
+    /// The callback after nft_on_transfer, with the receiver's answer (`true` = return it).
+    fn resolve(c: &mut Contract, returned: bool) -> bool {
+        testing_env!(
+            VMContextBuilder::new().predecessor_account_id("hm.near".parse().unwrap()).current_account_id("hm.near".parse().unwrap()).block_timestamp(T0).build(),
+            near_sdk::test_vm_config(),
+            near_sdk::RuntimeFeesConfig::test(),
+            Default::default(),
+            vec![near_sdk::PromiseResult::Successful(if returned { b"true".to_vec() } else { b"false".to_vec() })]
+        );
+        c.nft_resolve_transfer("alice.near".parse().unwrap(), "market.near".parse().unwrap(), "0".into(), Default::default())
+    }
+
+    #[test]
+    fn a_bounced_transfer_call_keeps_the_sellers_agent() {
+        let mut c = shop();
+        at("alice.near", 10 * MILLI, T0);
+        c.set_agent(0, Some("bot.alice.near".parse().unwrap()), None);
+        at("alice.near", 1, T0);
+        let _ = c.nft_transfer_call("market.near".parse().unwrap(), "0".into(), None, None, "".into());
+        assert!(c.agent_of(0).is_some(), "not unplugged before the receiver answers");
+        assert!(!resolve(&mut c, true)); // the market returns her
+        assert_eq!(c.get_mind(0).unwrap().owner.as_str(), "alice.near");
+        assert!(c.agent_of(0).is_some(), "a bounced transfer is a no-op: her agent stays");
+    }
+
+    #[test]
+    fn a_transfer_call_that_stands_unplugs_the_sellers_agent() {
+        let mut c = shop();
+        at("alice.near", 10 * MILLI, T0);
+        c.set_agent(0, Some("bot.alice.near".parse().unwrap()), None);
+        at("alice.near", 1, T0);
+        let _ = c.nft_transfer_call("market.near".parse().unwrap(), "0".into(), None, None, "".into());
+        assert!(resolve(&mut c, false)); // the market keeps her
+        assert_eq!(c.get_mind(0).unwrap().owner.as_str(), "market.near");
         assert!(c.agent_of(0).is_none());
     }
 

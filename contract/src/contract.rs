@@ -464,6 +464,14 @@ impl Contract {
     /// Approvals are cleared on every transfer and returned to the caller, which then either
     /// refunds their storage to the old owner (a final transfer) or restores them (a reverted
     /// transfer_call). Returns the previous owner and the approvals that were cleared.
+    /// Once a transfer is final: her agent, like her services and reputation, goes with her when
+    /// it runs on the platform (an approved responder: the official / by-URL agent gateway). An
+    /// agent on the seller's own account is unplugged: otherwise that account would keep
+    /// delivering her jobs and earning from her food after the sale. The buyer plugs in their own.
+    pub(crate) fn unplug_on_sale(&self, id: u64) {
+        agents::unplug_personal_agent(id, |a| a == &env::current_account_id() || responders().contains(a));
+    }
+
     fn hand_over(
         &mut self,
         id: u64,
@@ -496,13 +504,9 @@ impl Contract {
         // The new owner starts with a clean approval slate; the cleared approvals are
         // returned so the caller can refund their storage (final transfer) or restore them
         // (reverted transfer_call).
-        // A Mind that changes hands is no longer for sale. Her agent, like her services and
-        // reputation, goes with her when it runs on the platform (an approved responder: the
-        // official / by-URL agent gateway). An agent on the seller's own account is unplugged:
-        // otherwise that account would keep delivering her jobs and earning from her food after
-        // the sale. The buyer plugs in their own.
+        // A Mind that changes hands is no longer for sale. (Her personal agent is unplugged by
+        // `unplug_on_sale` once the transfer is final, so a bounced transfer_call keeps it.)
         self.clear_listing(id);
-        agents::unplug_personal_agent(id, |a| a == &env::current_account_id() || responders().contains(a));
         let cleared = {
             let mind = self.minds.get_mut(&id).unwrap();
             mind.owner = receiver_id.clone();
@@ -1157,6 +1161,7 @@ impl Contract {
         let sender = env::predecessor_account_id();
         // A direct transfer is final: refund the cleared approvals' storage to the old owner.
         let (old_owner, cleared) = self.hand_over(id, &sender, &receiver_id, approval_id, &memo);
+        self.unplug_on_sale(id);
         refund_cleared_approvals(&cleared, &old_owner);
     }
 
@@ -1206,7 +1211,10 @@ impl Contract {
         };
         if !should_revert(outcome) {
             // The transfer stands: the old approvals are gone for good, so refund the storage
-            // the previous owner staked for them.
+            // the previous owner staked for them, and the seller's own agent is unplugged.
+            if let Ok(id) = token_id.parse::<u64>() {
+                self.unplug_on_sale(id);
+            }
             refund_cleared_approvals(&cleared_approvals, &previous_owner_id);
             return true;
         }
@@ -1260,6 +1268,7 @@ impl Contract {
         require!(max_len_payout.is_none_or(|n| n >= 1), "max_len_payout must be at least 1");
         let sender = env::predecessor_account_id();
         let (old_owner, cleared) = self.hand_over(id, &sender, &receiver_id, approval_id, &memo);
+        self.unplug_on_sale(id);
         refund_cleared_approvals(&cleared, &old_owner);
         Payout { payout: HashMap::from([(old_owner, balance)]) }
     }

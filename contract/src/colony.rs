@@ -392,6 +392,7 @@ impl Contract {
         let seller = self.minds.get(&id).unwrap_or_else(|| env::panic_str("no such Mind")).owner.clone();
         require!(buyer != seller, "you already own this Mind");
         let (old_owner, cleared) = self.hand_over(id, &seller, &buyer, None, &Some("sale".into()));
+        self.unplug_on_sale(id);
         refund_cleared_approvals(&cleared, &old_owner);
         let _ = Promise::new(old_owner).transfer(NearToken::from_yoctonear(price));
         if paid > price {

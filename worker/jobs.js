@@ -122,7 +122,9 @@ function makeSleepRecorder({ account, view, contractId, now = () => Date.now(), 
         if (now() - (tried.get(row.id) ?? -Infinity) < SLEEP_RETRY_MS) continue;
         tried.set(row.id, now());
         sent.push(row.id);
-        account
+        // one at a time: the worker account also signs replies and deliveries, and a burst of
+        // parallel calls from one key races its nonce
+        await account
           .functionCall({ contractId, methodName: "settle", args: { id: row.id }, gas: "30000000000000", attachedDeposit: "0" })
           .then(() => log.log(`mind ${row.id} starved on idle burn: sleep recorded on chain, ghost window started`))
           .catch((e) => log.error(`settle ${row.id} failed:`, e.message));
