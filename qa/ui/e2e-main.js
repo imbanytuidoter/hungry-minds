@@ -15,7 +15,10 @@ module.exports = async (b) => {
   await b.goto(SITE + "/");
   await b.sleep(4000);
   const land = await b.text();
-  ok(land.includes(`${left.toLocaleString("en-US")} are still waiting to hatch`) || land.includes(`${left.toLocaleString("en-US")}`), "landing shows the real supply from chain", `${total} hatched, ${left} left`);
+  // the landing tells the mechanics, not live counters: it states the cap,
+  // which must be the contract's; the live count is checked in the app below
+  const cap = Number(total) + Number(left);
+  ok(land.includes(`Only ${cap.toLocaleString("en-US")} Minds will ever hatch`), "landing states the real supply cap from chain", `${total} hatched, ${left} left, cap ${cap}`);
   ok(!/Nova|Pip|Moss|Wren|Kiko/.test(land), "no sample Minds on the landing");
 
   // the language test shares this browser profile and may have left another language behind

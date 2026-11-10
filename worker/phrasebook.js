@@ -1,7 +1,7 @@
-// Offline brain: used when no NEAR_AI_KEY is configured, so a testnet deploy still answers
-// every parked thought (instead of letting each one time out and refund). Replies are
+// Offline brain: used when no model is configured (LLM_URL=off and no NEAR_AI_KEY) or a model
+// call fails, so a testnet deploy still answers every parked thought (instead of letting each one time out and refund). Replies are
 // picked from the Mind's on-chain passion dial and colour with its hunger state — no model
-// is called. Set NEAR_AI_KEY to switch the worker to real NEAR AI replies.
+// is called.
 
 const { PASSION } = require("./personality");
 

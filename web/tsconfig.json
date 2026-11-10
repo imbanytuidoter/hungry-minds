@@ -31,17 +31,31 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
-    ".next-live-mw3rjo0j/types/**/*.ts",
-    ".next-live-mw3ty26x/types/**/*.ts",
-    ".next-live-mw3wd4xz/types/**/*.ts",
-    ".next-live-mw41tlym/types/**/*.ts",
-    ".next-live-mw4uuuy1/types/**/*.ts",
+    ".next-dev/types/**/*.ts",
+    ".next-live-mw6yjmw6/types/**/*.ts",
+    ".next-live-mw6z6foc/types/**/*.ts",
+    ".next-live-mw8l6alb/types/**/*.ts",
+    ".next-live-mw9brgbl/types/**/*.ts",
+    ".next-live-mw9cid4r/types/**/*.ts",
+    ".next-live-mw9dc008/types/**/*.ts",
+    ".next-live-mw9ea0h7/types/**/*.ts",
+    ".next-live-mw9kebck/types/**/*.ts",
+    ".next-live-mw9m9c73/types/**/*.ts",
+    ".next-live-mw9nxm45/types/**/*.ts",
+    ".next-live-mw9sm0xi/types/**/*.ts",
+    ".next-live-mw9x0sl4/types/**/*.ts",
+    ".next-live-mwaokmzm/types/**/*.ts",
+    ".next-live-mwapv7ce/types/**/*.ts",
+    ".next-preview/types/**/*.ts",
     ".next-qa/types/**/*.ts",
-    ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-live-mw4z4u4m/types/**/*.ts"
+    ".next-live-mwavu0bf/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".next",
+    ".next-live-*",
+    ".next-preview",
+    ".next-dev"
   ]
 }

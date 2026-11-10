@@ -1,4 +1,4 @@
-// The glossy Mind character, ported 1:1 from the design handoff (GlossyMind.dc.html):
+// The glossy Mind character:
 // body gradient per tone, 11 eyes, 11 hats, 11 outfits, and the five moods.
 
 import { useId } from "react";

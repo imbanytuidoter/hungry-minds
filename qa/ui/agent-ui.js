@@ -96,7 +96,7 @@ module.exports = async (b, [role, account]) => {
     ok(!!(await b.until(`document.body.innerText.includes("For agents")`, 5000)), "the agent-market categories show");
     const j1 = await order("NEAR account lookup", "check my account");
     ok(j1?.service_id === lookup.id, "ordering places a job", j1 && `job ${j1.id}`);
-    ok(!!(await b.until(`document.body.innerText.includes("her agent Near Lookup Agent does the tasks")`, 5000)), "the chat says she talks herself and her agent does the tasks");
+    ok(!!(await b.until(`document.body.innerText.includes("chats herself; tasks and orders go to her agent Near Lookup Agent")`, 5000)), "the chat says she chats herself and tasks go to her agent");
     out.push("  " + (await b.click("/^Shop$/")));
     await b.sleep(800);
     out.push("  " + (await b.click("/^My orders/")));

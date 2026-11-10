@@ -1,6 +1,7 @@
-// Decor from the handoff: moss-covered rocks and soft leaves (MossRock / SoftLeaf .dc.html).
+// Decor: moss-covered rocks and soft leaves.
 
 import { useId } from "react";
+import { Vine } from "../Greenery";
 
 const ROCKS = {
   a: { rock: "M14 182 C 4 140, 30 92, 78 70 C 120 50, 170 46, 214 64 C 262 84, 292 128, 290 182 Z", moss: "M58 82 C 90 54, 150 44, 206 60 C 240 72, 262 92, 272 116 C 246 102, 214 100, 192 110 C 160 96, 120 98, 96 112 C 82 100, 66 96, 46 102 C 48 94, 52 88, 58 82 Z", crack: "M120 120 L 136 150 L 128 178 M210 130 L 222 160" },
@@ -101,12 +102,18 @@ export function CornerDecor() {
       <div aria-hidden className="hm-decor" style={{ right: -80, bottom: -60, width: "clamp(160px,18vw,280px)", aspectRatio: "300/190", transform: "scaleX(-1)" }}>
         <MossRock shape="b" />
       </div>
-      <div aria-hidden className="hm-decor" style={{ left: -90, top: "46%", width: "clamp(110px,11vw,160px)", aspectRatio: "220/120", opacity: 0.75, transform: "rotate(30deg)", transformOrigin: "0 50%" }}>
+      <div aria-hidden className="hm-decor" style={{ left: "clamp(2px,1.5vw,28px)", bottom: "clamp(44px,6vw,96px)", height: "clamp(170px,34vh,340px)" }}>
+        <Vine shape="a" style={{ height: "100%" }} />
+      </div>
+      <div aria-hidden className="hm-decor" style={{ right: "clamp(2px,1.5vw,28px)", bottom: "clamp(40px,5vw,86px)", height: "clamp(150px,30vh,300px)" }}>
+        <Vine shape="b" delay={0.5} style={{ height: "100%" }} />
+      </div>
+      <div aria-hidden className="hm-decor" style={{ left: -90, top: "46%", width: "clamp(110px,11vw,160px)", aspectRatio: "220/120", opacity: "calc(0.75 * var(--decor-opacity))", transform: "rotate(30deg)", transformOrigin: "0 50%" }}>
         <div className="hm-sway" style={{ width: "100%", height: "100%", animationDuration: "7s" }}>
           <SoftLeaf tone="mid" />
         </div>
       </div>
-      <div aria-hidden className="hm-decor" style={{ right: -90, top: "38%", width: "clamp(100px,10vw,150px)", aspectRatio: "220/120", opacity: 0.75, transform: "scaleX(-1) rotate(30deg)", transformOrigin: "0 50%" }}>
+      <div aria-hidden className="hm-decor" style={{ right: -90, top: "38%", width: "clamp(100px,10vw,150px)", aspectRatio: "220/120", opacity: "calc(0.75 * var(--decor-opacity))", transform: "scaleX(-1) rotate(30deg)", transformOrigin: "0 50%" }}>
         <div className="hm-sway" style={{ width: "100%", height: "100%", animationDuration: "8s" }}>
           <SoftLeaf tone="light" />
         </div>

@@ -16,7 +16,7 @@
 // with her and the new owner earns from it (or connects another).
 
 const crypto = require("crypto");
-const { KINDS, discover, run, guessArgs, firstJson } = require("./connectors");
+const { KINDS, discover, run, guessArgs, firstJson, marketPaywall, MARKET_PAYWALL } = require("./connectors");
 const official = require("./official");
 const { checkUrl } = require("./safe-fetch");
 
@@ -220,6 +220,7 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
     const secret = str(b.apiKey, 4000);
     try {
       if (kind === "official") official.get(conn.url); // throws for an unknown one
+      else if (marketPaywall(conn.url)) throw new Error(MARKET_PAYWALL);
       else await checkUrl(conn.url);
       if (kind === "openai" && !conn.model) throw new Error("give the model name your endpoint expects");
       const d = await discover(conn, secret);
@@ -445,7 +446,21 @@ Answer with only JSON: {"picks":[{"id":<service id>,"input":<an object with the 
     send(404, { error: "not found" });
   }
 
-  return { serves, about, chat, tick, route, health };
+  // For the x402 door (worker/x402.js): the full result, the agent's open question, and the
+  // buyer's answer to it, for a job whose task id the buyer holds.
+  const resultOf = (jobId) => store.result(jobId);
+  const questionOf = (jobId) => (store.job(jobId)?.state === "asking" ? store.job(jobId).question : null);
+  async function answerJob(jobId, text) {
+    const job = await view("get_job", { job_id: jobId }).catch(() => null);
+    if (!job || job.status !== "Open") return "this job is closed";
+    const st = store.job(jobId);
+    if (st?.state !== "asking") return "the agent isn't waiting for an answer";
+    store.setJob(jobId, { ...st, state: "answered", answer: str(text, 2000), answerFiles: [] });
+    attempts.delete(jobId);
+    return null;
+  }
+
+  return { serves, about, chat, tick, route, health, resultOf, questionOf, answerJob };
 }
 
 module.exports = { makeGateway };

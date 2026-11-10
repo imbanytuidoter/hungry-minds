@@ -1,6 +1,5 @@
-// Demo-world voice. In live mode replies come from the worker (worker/personality.js ->
-// NEAR AI) and land on chain via respond(); here a Mind answers from a small phrasebook
-// coloured by its nature, so the demo is honest about not calling a model.
+// Demo-world fallback voice: a small phrasebook coloured by the Mind's nature, used only if
+// the demo's model call (/api/brain) gives no text.
 
 import type { HungerState } from "./engine";
 

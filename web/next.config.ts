@@ -7,10 +7,21 @@ const nextConfig: NextConfig = {
   // The wallet modules (viem, wagmi, WalletConnect) make a big client bundle; build it with
   // less memory so it also fits on a busy machine.
   experimental: { webpackMemoryOptimizations: true, cpus: 1 },
-  // /classic was the first landing (sample art from lib/sample-minds.json); it is replaced
-  // by / and must not show sample Minds as if they were live.
+  // Old addresses go to their current place.
   async redirects() {
-    return [{ source: "/classic", destination: "/", permanent: false }];
+    return [
+      { source: "/classic", destination: "/", permanent: false },
+      // old pages: hatching and Mind pages now live inside the game; the redesign drafts are gone
+      { source: "/hatch", destination: "/app?hatch=1", permanent: false },
+      { source: "/mind/:id", destination: "/app?tab=account", permanent: false },
+      { source: "/designs/:path*", destination: "/", permanent: false },
+      { source: "/new", destination: "/", permanent: false },
+      { source: "/v1", destination: "/", permanent: false },
+    ];
+  },
+  // The landing is the static page in public/seed.
+  async rewrites() {
+    return { beforeFiles: [{ source: "/", destination: "/seed/index.html" }], afterFiles: [], fallback: [] };
   },
   // Some wallet modules (lib/wallets.ts) carry Node-only code paths they never take in a
   // browser: near-snap's file keystore wants `fs`, WalletConnect's logger optionally wants

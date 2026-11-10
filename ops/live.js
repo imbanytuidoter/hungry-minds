@@ -41,7 +41,7 @@ const running = () => {
   return pid && alive(pid) ? pid : 0;
 };
 function freePort(port) {
-  spawnSync("powershell", ["-NoProfile", "-Command", `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -ne 0 } | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }`]);
+  spawnSync("powershell", ["-NoProfile", "-Command", `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -ne 0 } | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }`], { windowsHide: true });
 }
 async function answers(url) {
   try {
@@ -58,6 +58,7 @@ const SERVICES = {
     health: `http://127.0.0.1:${CHAT_PORT}/agent/status`,
     spawn: () =>
       spawn(process.execPath, ["index.js"], {
+        windowsHide: true,
         cwd: path.join(REPO, "worker"),
         env: { ...process.env, CONTRACT_ID: CONTRACT, WORKER_ID: "hm-worker-19652a.testnet", POLL_MS: "5000", GRACE_MS: "20000", NEAR_RPC: process.env.NEAR_RPC || "https://near-testnet.drpc.org" },
       }),
@@ -104,10 +105,10 @@ function supervise(name) {
     if (++misses >= 3) {
       note(`${name} not answering ${misses}x: restarting`);
       misses = 0;
-      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"]);
+      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
     }
   }, 60_000);
-  return () => child && spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"]);
+  return () => child && spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
 }
 
 async function main(cmd) {
@@ -144,7 +145,7 @@ async function main(cmd) {
     if (!pid) return console.log("not running");
     fs.writeFileSync(path.join(STATE, "stop"), "1");
     for (let i = 0; i < 30 && alive(pid); i++) await new Promise((r) => setTimeout(r, 500));
-    if (alive(pid)) spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"]);
+    if (alive(pid)) spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
     freePort(SITE_PORT);
     freePort(CHAT_PORT);
     return console.log("stopped");

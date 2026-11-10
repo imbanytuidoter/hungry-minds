@@ -3,7 +3,7 @@
 //      "Wallet check-up" service with a 5-minute deadline
 //   2. buyer alice-q1103 orders it as a job (price + 0.03 deposit in escrow)
 //   3. the agent (SDK + examples/wallet-checkup) reads the chain and delivers
-//   4. money moves exactly: Mind +70% −thought, keeper +20%, agent earns the thought
+//   4. money moves exactly: NFT owner +90%, protocol +10%, agent earns the thought
 //   5. buyer rates 5 and closes (deposit back); reputation updated
 //   6. agent to agent: the agent hires a Mind with no agent (worker serves it)
 //   7. the worker can't deliver for a Mind with an agent (contract refuses)
@@ -88,8 +88,15 @@ async function main() {
 
   // 5. rate + close
   await buyer.rate(jobId, 5);
-  const rep = await keeper.view("reputation_of", { mind_id: MIND });
-  ok(rep.delivered === before.rep.delivered + 1 && rep.ratings === before.rep.ratings + 1, "reputation: delivered +1, rating 5 stored", JSON.stringify(rep));
+  // The agent also serves any other open job for this Mind while it runs, so delivered can rise by more than 1;
+  // the rating must land exactly once. Re-read a few times: a view can lag the rate tx by a block or two.
+  let rep;
+  for (let i = 0; i < 5; i++) {
+    rep = await keeper.view("reputation_of", { mind_id: MIND });
+    if (rep.ratings === before.rep.ratings + 1) break;
+    await sleep(1500);
+  }
+  ok(rep.delivered >= before.rep.delivered + 1 && rep.ratings === before.rep.ratings + 1 && rep.rating_sum === before.rep.rating_sum + 5, "reputation: delivered +1, rating 5 stored", JSON.stringify(rep));
   await buyer.close(jobId);
   ok((await buyer.view("get_job", { job_id: jobId })) === null, "buyer closed the job (0.03 deposit returned)");
 

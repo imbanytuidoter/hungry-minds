@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Hungry Minds">
+  <!-- The Hungry Minds badge, the original artwork redrawn as vectors so it stays sharp at every
+       size: a pink ring, a dark teal dish (so she stands out), the mochi Mind with her pink cap and sprout. -->
+  <defs>
+    <radialGradient id="hmRing" cx="30%" cy="24%" r="86%">
+      <stop offset="0" stop-color="#FFEBEA"/>
+      <stop offset=".42" stop-color="#FFD4D7"/>
+      <stop offset=".78" stop-color="#F9C0C6"/>
+      <stop offset="1" stop-color="#E99FA8"/>
+    </radialGradient>
+    <radialGradient id="hmDish" cx="42%" cy="36%" r="68%">
+      <stop offset="0" stop-color="#1F434A"/>
+      <stop offset=".6" stop-color="#132D33"/>
+      <stop offset=".9" stop-color="#0B1E23"/>
+      <stop offset="1" stop-color="#06141A"/>
+    </radialGradient>
+    <radialGradient id="hmBody" cx="40%" cy="28%" r="80%">
+      <stop offset="0" stop-color="#FFFFFB"/>
+      <stop offset=".45" stop-color="#FFF8EE"/>
+      <stop offset=".74" stop-color="#F8E9D9"/>
+      <stop offset=".9" stop-color="#ECD3BD"/>
+      <stop offset="1" stop-color="#DDBEA4"/>
+    </radialGradient>
+    <radialGradient id="hmCap" cx="36%" cy="18%" r="92%">
+      <stop offset="0" stop-color="#FFF1F2"/>
+      <stop offset=".42" stop-color="#FFD3D8"/>
+      <stop offset=".78" stop-color="#F7B2BB"/>
+      <stop offset="1" stop-color="#E48F9B"/>
+    </radialGradient>
+    <radialGradient id="hmLeafL" cx="38%" cy="30%" r="80%">
+      <stop offset="0" stop-color="#E8F1B2"/>
+      <stop offset=".55" stop-color="#C2D97A"/>
+      <stop offset="1" stop-color="#93B14E"/>
+    </radialGradient>
+    <radialGradient id="hmLeafR" cx="55%" cy="28%" r="80%">
+      <stop offset="0" stop-color="#EAF2B6"/>
+      <stop offset=".5" stop-color="#C6DC80"/>
+      <stop offset="1" stop-color="#96B352"/>
+    </radialGradient>
+    <radialGradient id="hmEye" cx="40%" cy="35%" r="70%">
+      <stop offset="0" stop-color="#5E4031"/>
+      <stop offset="1" stop-color="#33201A"/>
+    </radialGradient>
+    <filter id="hmSoft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7"/></filter>
+    <filter id="hmSoft2" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="3"/></filter>
+    <clipPath id="hmDishClip"><circle cx="256" cy="256" r="214"/></clipPath>
+    <path id="hmBodyPath" d="M257 222 C 350 222 418 282 418 354 C 418 420 350 452 257 452 C 164 452 98 420 98 354 C 98 282 164 222 257 222 Z"/>
+  </defs>
+
+  <!-- ring: a soft pink torus lit from the top left, with a crisp edge so it holds on any ground -->
+  <circle cx="256" cy="256" r="250" fill="url(#hmRing)"/>
+  <circle cx="256" cy="256" r="249" fill="none" stroke="#DB8E98" stroke-width="2" opacity=".6"/>
+  <path d="M62 190 A 204 204 0 0 1 190 62" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" opacity=".6"/>
+
+  <!-- dish: recessed into the ring, its rim in shadow -->
+  <circle cx="256" cy="256" r="217" fill="#C97F8A"/>
+  <circle cx="256" cy="256" r="214" fill="url(#hmDish)"/>
+  <g clip-path="url(#hmDishClip)">
+    <circle cx="262" cy="264" r="214" fill="none" stroke="#000000" stroke-width="16" opacity=".35" filter="url(#hmSoft2)"/>
+    <!-- her shadow on the dish -->
+    <use href="#hmBodyPath" transform="translate(6 12)" fill="#000000" opacity=".45" filter="url(#hmSoft)"/>
+  </g>
+
+  <!-- sprout -->
+  <path d="M256 192 C 256 174 257 162 261 150" fill="none" stroke="#9BBB55" stroke-width="11" stroke-linecap="round"/>
+  <path d="M259 153 C 236 104 188 90 162 110 C 166 150 220 172 259 153 Z" fill="url(#hmLeafL)"/>
+  <path d="M261 151 C 260 100 300 62 340 70 C 350 116 308 156 261 151 Z" fill="url(#hmLeafR)"/>
+  <path d="M250 148 C 230 130 204 118 180 114" fill="none" stroke="#F6F9D8" stroke-width="3" stroke-linecap="round" opacity=".5"/>
+  <path d="M268 144 C 282 118 304 96 328 84" fill="none" stroke="#F6F9D8" stroke-width="3" stroke-linecap="round" opacity=".5"/>
+
+  <!-- body: raised off the dish -->
+  <use href="#hmBodyPath" fill="url(#hmBody)"/>
+  <use href="#hmBodyPath" fill="none" stroke="#CFAE94" stroke-width="2" opacity=".5"/>
+  <path d="M124 312 C 144 270 186 246 226 240" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" opacity=".75"/>
+
+  <!-- cap: a little radish top resting on her head -->
+  <ellipse cx="256" cy="242" rx="70" ry="11" fill="#D9A39A" opacity=".45" filter="url(#hmSoft2)"/>
+  <path d="M184 228 C 184 198 214 180 255 180 C 296 180 326 198 326 228 C 326 241 296 248 255 248 C 214 248 184 241 184 228 Z" fill="url(#hmCap)"/>
+  <ellipse cx="228" cy="197" rx="20" ry="7" fill="#FFFFFF" opacity=".55" transform="rotate(-12 228 197)"/>
+
+  <!-- face -->
+  <path d="M167 268 Q 182 259 198 265" fill="none" stroke="#A27662" stroke-width="6.5" stroke-linecap="round"/>
+  <path d="M316 265 Q 332 259 347 268" fill="none" stroke="#A27662" stroke-width="6.5" stroke-linecap="round"/>
+  <circle cx="190" cy="320" r="23" fill="url(#hmEye)"/>
+  <circle cx="325" cy="320" r="23" fill="url(#hmEye)"/>
+  <circle cx="198" cy="311" r="7" fill="#FFFFFF"/>
+  <circle cx="333" cy="311" r="7" fill="#FFFFFF"/>
+  <ellipse cx="152" cy="352" rx="19" ry="10" fill="#F4ADA8" opacity=".32"/>
+  <ellipse cx="364" cy="352" rx="19" ry="10" fill="#F4ADA8" opacity=".32"/>
+  <path d="M225 344 Q 258 351 291 344 Q 289 388 258 390 Q 227 388 225 344 Z" fill="#6E2C21"/>
+  <path d="M238 374 Q 258 362 278 374 Q 271 388 258 389 Q 245 388 238 374 Z" fill="#F4989A"/>
+</svg>

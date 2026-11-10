@@ -45,7 +45,13 @@ module.exports = async (b, [role, account, mindName]) => {
     await b.js(`localStorage.setItem("hm-burner", JSON.stringify({ accountId: ${JSON.stringify(account)}, key: ${JSON.stringify(k.private_key)} })); "ok"`);
     await b.goto(SITE);
     ok(!!(await b.until(`document.body.innerText.includes(${JSON.stringify(account)})`, 30000)), "signed in", account);
-    const mind = (await view("colony_snapshot")).minds.find((r) => r.mind.owner === account && r.mind.name === mindName);
+    // page through every Mind: a snapshot holds at most 60
+    let mind = null;
+    for (let from = 0; !mind; from += 60) {
+      const s = await view("colony_snapshot", { from_index: from, limit: 60 });
+      mind = s.minds.find((r) => r.mind.owner === account && r.mind.name === mindName) || null;
+      if (!s.minds.length || from + 60 >= s.total_minds) break;
+    }
     // pick the Mind in the header selector, then open Account
     await b.js(`(() => { const s = [...document.querySelectorAll("select")].find(x => [...x.options].some(o => o.text.startsWith(${JSON.stringify(mindName)}))); if (!s) return "no selector"; const o = [...s.options].find(o => o.text.startsWith(${JSON.stringify(mindName)})); const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set; set.call(s, o.value); s.dispatchEvent(new Event("change", { bubbles: true })); return "selected"; })()`);
     out.push("  " + (await b.click("/^Account$/")));

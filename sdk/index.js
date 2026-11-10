@@ -158,6 +158,8 @@ class MindAgent {
   /**
    * Order a service from another Mind, paying from this agent's account. With `wait`, polls
    * until the job is delivered or refunded and returns it (result in `job.result`).
+   * Close finished jobs with `close(id)`: a buyer may hold at most 50 not yet closed, and the
+   * contract refuses a further order until one is closed (it also returns the 0.03 deposit).
    */
   async hire(serviceId, input, { wait = true, timeoutMs = 15 * 60_000 } = {}) {
     const s = await this.view("get_service", { service_id: serviceId });
@@ -214,4 +216,6 @@ class MindAgent {
   }
 }
 
-module.exports = { MindAgent, JOB_DEPOSIT, clipBytes, MAX_RESULT_BYTES };
+const { mindGuard, mindOwner } = require("./mind-bound");
+
+module.exports = { MindAgent, JOB_DEPOSIT, clipBytes, MAX_RESULT_BYTES, mindGuard, mindOwner };

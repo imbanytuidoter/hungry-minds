@@ -1,12 +1,10 @@
-// Colony services (the handoff's Shop). There is no separate service contract: a service
-// is a paid prompt to another keeper's Mind, which is exactly the contract's `chat`
-// (deposit >= guest minimum, split 90% to the Mind's owner / 10% protocol).
-// So "Try this" opens a paid chat with that Mind; the price is the chat deposit.
+// Colony services. A service is a job (contract/src/agents.rs, `order_job`): the price waits
+// in escrow until delivery, then 90% to the Mind's owner / 10% protocol. In the demo world
+// it is played as a paid chat.
 
 export type Category = "predict" | "whales" | "data" | "yield" | "defi" | "risk" | "research" | "content" | "companion" | "agents" | "dev";
 
-/** Contract category index order (colony.rs CATEGORIES): the agent market's categories,
- *  modelled on CROO's Agent Store and ordered by how much they sell there. */
+/** Contract category index order (colony.rs CATEGORIES): the 11 service categories. */
 export const CAT_IDS: Category[] = ["predict", "whales", "data", "yield", "defi", "risk", "research", "content", "companion", "agents", "dev"];
 
 /** Categories that sell facts: only a real agent may deliver them (contract: needs_agent). */

@@ -2,7 +2,7 @@
   "name": "hungry-minds-worker",
   "version": "0.1.0",
   "private": true,
-  "description": "Off-chain thinking worker: polls parked thoughts, asks NEAR AI, resumes on-chain.",
+  "description": "Off-chain worker: answers thoughts, off-chain chat, colony jobs and the agent gateway.",
   "type": "commonjs",
   "main": "index.js",
   "scripts": {

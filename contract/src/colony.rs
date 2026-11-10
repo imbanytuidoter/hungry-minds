@@ -165,7 +165,7 @@ impl Contract {
             let mind = self.minds.get(&id).unwrap_or_else(|| env::panic_str("no such Mind"));
             require!(caller != mind.owner, "use think() for your own Mind");
             require!(!mind.ghost, "this Mind is a ghost");
-            require!((mind.asleep_since) == (0), "this Mind is asleep — only the owner can feed it");
+            require!((mind.asleep_since) == (0), "this Mind is asleep: feed her to wake her (anyone can)");
         }
         // Never park a thought that was not actually charged (else a timeout would refund an
         // undebited cost and mint NEAR).
@@ -174,7 +174,6 @@ impl Contract {
         self.park_thought(id, prompt, false, cost, Some((caller, deposit, service_id)))
     }
 
-    /// A delivered order updates its service's stats.
     /// Validate and store a new service for one of the caller's Minds (storage is charged by
     /// the public method that calls this). Returns its id.
     pub(crate) fn add_service(&mut self, mind_id: u64, title: String, description: String, category: u8, price: U128, unit: String) -> u64 {
@@ -209,6 +208,7 @@ impl Contract {
         id
     }
 
+    /// A delivered order updates its service's stats.
     pub(crate) fn record_order(&mut self, service_id: u64, deposit: u128) {
         if let Some(s) = self.colony.services.get_mut(&service_id) {
             s.orders += 1;

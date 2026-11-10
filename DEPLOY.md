@@ -32,7 +32,7 @@ node ops/live.js status   # supervisor, worker and site
 node ops/live.js stop
 ```
 
-## Quick path: no near-cli, just node (what produced the deploy above)
+## Quick path: no near-cli, just node
 
 `rpc.testnet.near.org` is deprecated and rate-limits, so the scripts default to FastNEAR. If
 FastNEAR's free tier returns 429, set `NEAR_RPC=https://near-testnet.drpc.org`.
@@ -49,12 +49,10 @@ node testnet-account.js hungry-minds-<suffix>.testnet           # faucet-funded 
 node setup-testnet.js hungry-minds-<suffix>.testnet ../contract/target/wasm32-unknown-unknown/release/hungry_minds_contract.wasm <suffix>
 #   deploys, creates worker + two keeper accounts, hatches 6 Minds with looks,
 #   publishes 7 services, lists one Mind for sale
-node smoke-testnet.js hungry-minds-<suffix>.testnet <suffix>     # think + order_service, prints the splits
 node smoke-colony.js  hungry-minds-<suffix>.testnet <suffix>     # set_look, list/unlist, pause
 node redeploy.js hungry-minds-<suffix>.testnet <wasm>            # new code, same state
 node reset-contract.js hungry-minds-<suffix>.testnet <wasm> <beneficiary>.testnet  # testnet only: wipe to 0 Minds, same id
 node add-responder.js hungry-minds-<suffix>.testnet hm-worker-<suffix>.testnet       # once: let the worker answer thoughts
-node qa-finance.js <wasm> <suffix>                                # money check on a throwaway QA contract
 
 CONTRACT_ID=hungry-minds-<suffix>.testnet WORKER_ID=hm-worker-<suffix>.testnet node index.js   # the brain
 ```
@@ -89,7 +87,7 @@ cargo build --target wasm32-unknown-unknown --release --manifest-path contract/C
 # the contract account (or create a fresh subaccount)
 near create-account hungry-minds.$ACC --masterAccount $ACC --initialBalance 10
 
-# a throwaway worker account (only calls respond + pays gas)
+# a throwaway worker account (answers chat, delivers and refunds jobs, records sleep; pays gas)
 near create-account hm-worker.$ACC --masterAccount $ACC --initialBalance 5
 ```
 
@@ -133,12 +131,14 @@ near call hungry-minds.$ACC think '{"id":0,"prompt":"who are you?"}' --accountId
 near view hungry-minds.$ACC last_thought '{"id":0}'    # -> Juno's reply
 
 # a stranger pays 0.01 to chat (90% to Juno's owner, 10% treasury; Juno spends one thought of her own food)
-near call hungry-minds.$ACC chat '{"id":1,"prompt":"hello"}' --accountId someone.testnet --deposit 0.01 --gas 300000000000000
+near call hungry-minds.$ACC chat '{"id":0,"prompt":"hello"}' --accountId someone.testnet --deposit 0.01 --gas 300000000000000
 
 # feed, claim, drain-to-asleep, reap (demo-window build), sell — see README walkthrough
 ```
 
-The worker account never touches a Mind's balance; it only calls `respond` and pays gas.
+The worker account never takes a Mind's food. It calls `respond`, `settle_chats`, `deliver_job` and
+`refund_job`, and `settle` for a Mind that starved on idle burn (so her sleep is recorded and the ghost
+window starts; SLEEP=off turns that off), and pays the gas for all of them.
 Keep the worker's and NEAR AI keys out of git (worker/.gitignore covers `.env`).
 
 ## 7. Point the web at it (goes live, no code change)
@@ -148,6 +148,9 @@ cd web
 cp .env.example .env.local
 #   NEXT_PUBLIC_CONTRACT_ID=hungry-minds.$ACC
 #   CHAT_SERVER_URL=http://127.0.0.1:8788   (the worker's chat server + agent gateway; this is the default)
+#   NEXT_PUBLIC_SITE_URL=https://<public domain>   (link previews: makes og:image absolute on every
+#                                                  Next page; also put the absolute image URL in
+#                                                  web/public/seed/index.html, the static landing)
 npm install && npm run build && npm start
 ```
 
@@ -156,7 +159,7 @@ the off-chain chat (no transaction per message) and connecting an agent need it.
 else the site does is a transaction or a view on the contract, so it works with only the
 contract deployed; the worker answers those on chain wherever it runs.
 
-With `NEXT_PUBLIC_CONTRACT_ID` set, the gallery and Mind pages read the chain over RPC and the
+With `NEXT_PUBLIC_CONTRACT_ID` set, the game at `/app` reads the chain over RPC and the
 Connect-wallet button + hatch/feed/talk sign real transactions through NEAR Wallet Selector.
 Leave it empty and the site stays in preview (sample Minds) — judges can clone and see the art
 with no deploy, then set the var to go live.

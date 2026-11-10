@@ -2,7 +2,7 @@
 //!
 //! The contract stores NO `state` field; the visible state (and the SVG the
 //! wallet shows) is a pure function of `balance`, so per-token storage stays
-//! tiny. Thresholds per build plan §16.3/§16.4.
+//! tiny. Thresholds are shares of FOOD_BAR_FULL (see `hunger_state`).
 
 /// 1 NEAR expressed in yoctoNEAR (10^24).
 pub const ONE_NEAR: u128 = 1_000_000_000_000_000_000_000_000;
@@ -19,13 +19,16 @@ pub enum HungerState {
 
 /// Derive the hunger state from the Mind's food balance (yoctoNEAR).
 ///
-/// Full ≥ 0.08 NEAR · Content ≥ 0.03 · Hungry ≥ 0.01 · Starving > 0 · Asleep = 0.
-/// Scaled to a 0.1 NEAR newborn and feeds of at most 0.1 NEAR.
+/// Her food bar: 100% is the food one Dream swirl gives (0.05 NEAR, 95% of it food = 0.0475).
+pub const FOOD_BAR_FULL: u128 = ONE_NEAR * 475 / 10_000;
+
+/// Full ≥ 80% of the bar (0.038 NEAR) · Content ≥ 30% (0.01425) · Hungry ≥ 10% (0.00475)
+/// · Starving > 0 · Asleep = 0. A newborn's 0.1 NEAR is a full bar with food to spare.
 /// (`Ghost` is a separate, time-based flag — not derived here.)
 pub fn hunger_state(balance_yocto: u128) -> HungerState {
-    const FULL: u128 = ONE_NEAR * 8 / 100; // 0.08 NEAR
-    const CONTENT: u128 = ONE_NEAR * 3 / 100; // 0.03 NEAR
-    const HUNGRY: u128 = ONE_NEAR / 100; // 0.01 NEAR
+    const FULL: u128 = FOOD_BAR_FULL * 8 / 10; // 0.038 NEAR
+    const CONTENT: u128 = FOOD_BAR_FULL * 3 / 10; // 0.01425 NEAR
+    const HUNGRY: u128 = FOOD_BAR_FULL / 10; // 0.00475 NEAR: one Pea pod
 
     if balance_yocto >= FULL {
         HungerState::Full
@@ -45,7 +48,7 @@ pub const NS_PER_DAY: u64 = 86_400 * 1_000_000_000;
 
 /// Default autonomous-metabolism rate: a neglected Mind burns this many thoughts' worth of
 /// food per day from the passage of time alone. 10/day at the default 0.002 thought cost
-/// means a 0.2 NEAR Mind (100 thoughts) survives ~10 untouched days — the "Пил" calibration.
+/// means a newborn's 0.1 NEAR (50 thoughts) lasts ~5 untouched days.
 /// Governable (seeds `Contract::idle_rate_per_day`).
 pub const DEFAULT_IDLE_RATE: u64 = 10;
 
@@ -130,27 +133,36 @@ mod tests {
     }
 
     #[test]
-    fn below_one_hundredth_near_is_starving() {
+    fn the_bar_is_one_dream_swirl_of_food() {
+        assert_eq!(FOOD_BAR_FULL, ONE_NEAR / 20 * 95 / 100); // 95% of 0.05 NEAR
+    }
+
+    #[test]
+    fn below_a_tenth_of_the_bar_is_starving() {
         assert_eq!(hunger_state(1), HungerState::Starving);
-        assert_eq!(hunger_state(ONE_NEAR / 200), HungerState::Starving); // 0.005
+        assert_eq!(hunger_state(FOOD_BAR_FULL / 10 - 1), HungerState::Starving);
+        assert_eq!(hunger_state(ONE_NEAR / 250), HungerState::Starving); // 0.004
     }
 
     #[test]
-    fn two_hundredths_near_is_hungry() {
-        assert_eq!(hunger_state(ONE_NEAR / 50), HungerState::Hungry); // 0.02
-        assert_eq!(hunger_state(ONE_NEAR / 100), HungerState::Hungry); // exactly 0.01
+    fn a_tenth_of_the_bar_is_hungry() {
+        assert_eq!(hunger_state(FOOD_BAR_FULL / 10), HungerState::Hungry); // exactly 10%: one Pea pod
+        assert_eq!(hunger_state(ONE_NEAR / 100), HungerState::Hungry); // 0.01
+        assert_eq!(hunger_state(FOOD_BAR_FULL * 3 / 10 - 1), HungerState::Hungry);
     }
 
     #[test]
-    fn five_hundredths_near_is_content() {
-        assert_eq!(hunger_state(ONE_NEAR / 20), HungerState::Content); // 0.05
-        assert_eq!(hunger_state(ONE_NEAR * 3 / 100), HungerState::Content); // exactly 0.03
+    fn thirty_percent_of_the_bar_is_content() {
+        assert_eq!(hunger_state(FOOD_BAR_FULL * 3 / 10), HungerState::Content); // exactly 30%
+        assert_eq!(hunger_state(ONE_NEAR * 3 / 100), HungerState::Content); // 0.03
+        assert_eq!(hunger_state(FOOD_BAR_FULL * 8 / 10 - 1), HungerState::Content);
     }
 
     #[test]
-    fn a_newborns_tenth_of_a_near_or_more_is_full() {
+    fn eighty_percent_of_the_bar_or_more_is_full() {
         assert_eq!(hunger_state(ONE_NEAR / 10), HungerState::Full); // a newborn's 0.1
-        assert_eq!(hunger_state(ONE_NEAR * 8 / 100), HungerState::Full); // exactly 0.08
+        assert_eq!(hunger_state(FOOD_BAR_FULL * 8 / 10), HungerState::Full); // exactly 80%
+        assert_eq!(hunger_state(FOOD_BAR_FULL), HungerState::Full); // one Dream swirl
         assert_eq!(hunger_state(ONE_NEAR), HungerState::Full);
         assert_eq!(hunger_state(ONE_NEAR * 10), HungerState::Full);
     }

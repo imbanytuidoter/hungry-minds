@@ -3,19 +3,21 @@
 import { useEffect, useState } from "react";
 import GlossyMind from "./GlossyMind";
 import { useGame } from "./GameProvider";
-import { fmt, moodOf, STATE_LABEL, stateOf, type MindRec } from "@/lib/game/engine";
+import { fmt, foodBarPct, moodOf, STATE_LABEL, stateOf, timeToSleep, type MindRec } from "@/lib/game/engine";
+import { dur } from "./HomePanels";
 import { TONE_TILE } from "@/lib/game/look";
 import { CAT_IDS, CATEGORIES, needsAgent, type Category, type Offer } from "@/lib/game/services";
 import type { JobRec } from "./GameProvider";
+import { ConnectButtons } from "./Header";
 import { clipBytes, LIMITS } from "@/lib/game/bytes";
 import { CONTRACT_ID, JOB_DEPOSIT_NEAR } from "@/lib/chain";
-import { AGENT_KINDS, answerJob, FULL_RESULT, jobDetail, navigate, officialAgents, openFile, uploadFile, type AgentFile, type ConnectForm, type GatewayAgent, type JobDetail, type OfficialAgent, type Suggestion } from "@/lib/agentClient";
+import { AGENT_KINDS, answerJob, isAgentMarketUrl, FULL_RESULT, jobDetail, navigate, officialAgents, openFile, uploadFile, type AgentFile, type ConnectForm, type GatewayAgent, type JobDetail, type OfficialAgent, type Suggestion } from "@/lib/agentClient";
 
 type Sort = "pop" | "new" | "low" | "high";
 
-export default function ShopPanel({ cat, setCat, order, visit }: { cat: Category | "all"; setCat: (c: Category | "all") => void; order: (m: MindRec, s: Offer, prefill?: string) => void; visit: (id: number) => void }) {
+export default function ShopPanel({ cat, setCat, order, visit, initialMode = "market", toHatch }: { initialMode?: ShopMode; toHatch: () => void; cat: Category | "all"; setCat: (c: Category | "all") => void; order: (m: MindRec, s: Offer, prefill?: string) => void; visit: (id: number) => void }) {
   const g = useGame();
-  const [mode, setMode] = useState<"market" | "orders" | "earn">("market");
+  const [mode, setMode] = useState<ShopMode>(initialMode);
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<Sort>("pop");
 
@@ -33,29 +35,32 @@ export default function ShopPanel({ cat, setCat, order, visit }: { cat: Category
     .filter((x): x is { m: MindRec; price: number } => !!x.m && x.m.owner !== g.account);
 
   return (
-    <section className="glass panel" style={{ flex: 1, overflow: "auto", minHeight: 0, background: "rgba(255,255,255,.45)" }}>
+    <section className="glass panel" style={{ flex: 1, overflow: "auto", minHeight: 0, background: "color-mix(in srgb, var(--surface) 45%, transparent)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <span style={{ fontWeight: 600, fontSize: 24, letterSpacing: "-.02em" }}>Shop</span>
           <span className="sub">{g.mode === "live" ? "Your payment waits in the contract until the job is done, or comes back" : "Every order is a paid chat with the Mind who does the work"}</span>
         </div>
-        <div style={{ display: "flex", gap: 4, padding: 4, borderRadius: 999, background: "rgba(255,255,255,.6)" }}>
+        <div style={{ display: "flex", gap: 4, padding: 4, borderRadius: 999, background: "color-mix(in srgb, var(--surface) 60%, transparent)" }}>
           {(
             [
               ["market", "Marketplace"],
+              ["nft", forSale.length ? `Buy & sell Minds · ${forSale.length}` : "Buy & sell Minds"],
               ["orders", g.jobs.length ? `My orders · ${g.jobs.length}` : "My orders"],
               ["earn", "Developer panel"],
             ] as const
           ).filter(([id]) => id !== "orders" || g.mode === "live").map(([id, n]) => (
-            <button key={id} onClick={() => setMode(id)} style={{ padding: "8px 16px", borderRadius: 999, border: "none", background: mode === id ? "#4A2E44" : "transparent", color: mode === id ? "#fff" : "#4A2E44", fontWeight: 600, fontSize: 13.5 }}>
+            <button key={id} onClick={() => setMode(id)} style={{ padding: "8px 16px", borderRadius: 999, border: "none", background: mode === id ? "var(--ink)" : "transparent", color: mode === id ? "var(--on-ink)" : "var(--ink)", fontWeight: 600, fontSize: 13.5 }}>
               {n}
             </button>
           ))}
         </div>
       </div>
 
-      {mode === "earn" ? (
-        <DevPanel />
+      {mode === "nft" ? (
+        <SalesPanel forSale={forSale} visit={visit} toHatch={toHatch} />
+      ) : mode === "earn" ? (
+        <DevPanel toHatch={toHatch} />
       ) : mode === "orders" ? (
         <OrdersPanel />
       ) : (
@@ -65,8 +70,8 @@ export default function ShopPanel({ cat, setCat, order, visit }: { cat: Category
               <span style={{ fontWeight: 600, fontSize: 16 }}>Minds for sale</span>
               <div className="scroll-x" style={{ gap: 10 }}>
                 {forSale.map(({ m, price }) => (
-                  <div key={m.id} className="card" style={{ flex: "none", width: 230, flexDirection: "row", alignItems: "center", gap: 10, padding: 12 }}>
-                    <div style={{ width: 52, height: 52, borderRadius: 14, background: TONE_TILE[m.look.tone][1], position: "relative", flex: "none" }}>
+                  <div key={m.id} className="card" style={{ flex: "none", width: 280, flexDirection: "row", alignItems: "center", gap: 10, padding: 12 }}>
+                    <div className="hm-tile" style={{ width: 52, height: 52, borderRadius: 14, background: TONE_TILE[m.look.tone][1], position: "relative", flex: "none" }}>
                       <div style={{ position: "absolute", left: "10%", top: "10%", width: "80%", aspectRatio: "200/210" }}>
                         <GlossyMind tone={m.look.tone} mood={moodOf(stateOf(m))} eyes={m.look.eyes} hat={m.look.hat} outfit={m.look.outfit} />
                       </div>
@@ -75,9 +80,7 @@ export default function ShopPanel({ cat, setCat, order, visit }: { cat: Category
                       <button className="btn-link" style={{ color: "var(--ink-strong)", fontSize: 14, textAlign: "left" }} onClick={() => visit(m.id)}>
                         {m.name}
                       </button>
-                      <span style={{ fontSize: 11.5, color: "var(--muted)" }}>
-                        food {fmt(m.balance, 2)} · {m.thoughts} thoughts
-                      </span>
+                      <MindCondition m={m} />
                       <button className="btn-ink" style={{ padding: "6px 10px", fontSize: 12, alignSelf: "flex-start" }} disabled={g.busy} onClick={() => confirm(`Buy ${m.name} for ${price} NEAR? You get her whole: food, memories and services.`) && g.buy(m.id)}>
                         Buy · {price} NEAR
                       </button>
@@ -103,8 +106,8 @@ export default function ShopPanel({ cat, setCat, order, visit }: { cat: Category
               const on = c.id === cat;
               const k = c.id === "all" ? catalogue.length : catalogue.filter((x) => x.s.cat === c.id).length;
               return (
-                <button key={c.id} onClick={() => setCat(c.id)} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 12px 4px 4px", borderRadius: 999, border: `1px solid ${on ? "#4A2E44" : "rgba(74,46,68,.08)"}`, background: on ? "#4A2E44" : "rgba(255,255,255,.7)", color: on ? "#fff" : "#4A2E44", fontWeight: 500, fontSize: 13, transition: "background-color .15s, color .15s" }}>
-                  <span style={{ flex: "none", width: 24, height: 24, borderRadius: 999, background: on ? "#fff" : c.tile, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <button key={c.id} onClick={() => setCat(c.id)} aria-pressed={on} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 12px 4px 4px", borderRadius: 999, border: `1px solid ${on ? "var(--ink)" : "rgba(74,46,68,.08)"}`, background: on ? "var(--ink)" : "color-mix(in srgb, var(--surface) 70%, transparent)", color: on ? "var(--on-ink)" : "var(--ink)", fontWeight: 500, fontSize: 13, transition: "background-color .15s, color .15s" }}>
+                  <span className="hm-cat-ic" style={{ flex: "none", width: 24, height: 24, borderRadius: 999, background: on ? "var(--surface)" : c.tile, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke={c.ink} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                       <path d={c.icon} />
                     </svg>
@@ -129,33 +132,38 @@ export default function ShopPanel({ cat, setCat, order, visit }: { cat: Category
               const noAgent = g.mode === "live" && needsAgent(s.cat) && !g.agents[m.id]?.account;
               const open = st !== "asleep" && st !== "ghost" && s.live && !mine && !noAgent;
               return (
-                <div key={s.id} className="lift" style={{ display: "flex", flexDirection: "column", borderRadius: 20, background: "#fff", border: "1px solid var(--line)", padding: "16px 16px 0", opacity: s.live ? 1 : 0.6 }}>
+                <div key={s.id} className="lift" style={{ display: "flex", flexDirection: "column", borderRadius: 20, background: "var(--surface)", border: "1px solid var(--line)", padding: "16px 16px 0", opacity: s.live ? 1 : 0.6 }}>
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
                     <span style={{ fontWeight: 600, fontSize: 15.5, lineHeight: 1.25, color: "var(--ink-strong)" }}>{s.title}</span>
-                    {s.badge && <span style={{ flex: "none", padding: "3px 8px", borderRadius: 999, background: s.badge === "New" ? "#2FBF71" : "#FF6FA3", color: "#fff", fontSize: 10.5, fontWeight: 600 }}>{s.badge}</span>}
+                    {s.badge && <span style={{ flex: "none", padding: "3px 8px", borderRadius: 999, background: s.badge === "New" ? "#2FBF71" : "var(--accent)", color: "var(--on-ink)", fontSize: 10.5, fontWeight: 600 }}>{s.badge}</span>}
                   </div>
-                  <span style={{ marginTop: 6, fontSize: 13, lineHeight: 1.45, color: "#8A7A86", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", minHeight: 37 }}>{s.desc}</span>
+                  <span style={{ marginTop: 6, fontSize: 13, lineHeight: 1.45, color: "var(--muted)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", minHeight: 37 }}>{s.desc}</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
                     <span className="mono" style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 15, fontWeight: 600, color: "var(--ink-strong)" }}>
-                      <span style={{ width: 14, height: 14, borderRadius: 7, background: "linear-gradient(135deg,#FF85B5,#FF6FA3)", display: "inline-block" }} />
-                      {s.price.toFixed(2)}
-                      <span style={{ fontWeight: 400, color: "#A08898", fontSize: 13 }}>/ {s.unit}</span>
+                      {s.price.toFixed(2)} NEAR
+                      <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 13 }}>/ {s.unit}</span>
                     </span>
                     {s.sla && (
                       <span className="mono" style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)" }}>
-                        reply {s.sla}
+                        due in {s.sla}
                       </span>
                     )}
                   </div>
                   {/* one quiet line of facts, then one line for who does the work (or why it can't) */}
                   <span className="num" style={{ marginTop: 8, fontSize: 12.5, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {[
-                      CATEGORIES.find((c) => c.id === s.cat)!.name,
-                      `${s.orders.toLocaleString("en-US")} ${s.orders === 1 ? "order" : "orders"}`,
-                      s.rating ? `★ ${s.rating.toFixed(1)}` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
+                    {[CATEGORIES.find((c) => c.id === s.cat)!.name, `${s.orders.toLocaleString("en-US")} ${s.orders === 1 ? "order" : "orders"}`].join(" · ")}
+                    {s.rating ? (
+                      <>
+                        {" · "}
+                        {/* the rating reads at a glance: a gold star, the score in full ink */}
+                        <span className="hm-rating" aria-label={`rated ${s.rating.toFixed(1)} of 5`} style={{ display: "inline-flex", alignItems: "center", gap: 3, verticalAlign: "-2px" }}>
+                          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" style={{ display: "inline-block", flex: "none" }}>
+                            <path d="M12 2.6l2.9 6 6.5.8-4.8 4.5 1.2 6.5L12 17.3l-5.8 3.1 1.2-6.5L2.6 9.4l6.5-.8z" fill="#F2B544" stroke="#C98A1E" strokeWidth="1" strokeLinejoin="round" />
+                          </svg>
+                          <b style={{ color: "var(--ink-strong)", fontWeight: 600 }}>{s.rating.toFixed(1)}</b>
+                        </span>
+                      </>
+                    ) : null}
                   </span>
                   <span style={{ marginTop: 4, minHeight: 18, display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 500 }}>
                     {!s.live ? (
@@ -167,26 +175,26 @@ export default function ShopPanel({ cat, setCat, order, visit }: { cat: Category
                     ) : st === "asleep" || st === "ghost" ? (
                       <span style={{ color: "#7A55C8" }}>{STATE_LABEL[st]}</span>
                     ) : g.linked[m.id] ? (
-                      <span style={{ color: "#3D5BA9" }} title={`${AGENT_KINDS.find((k) => k.id === g.linked[m.id].kind)?.name}: ${g.linked[m.id].url}`}>
+                      <span style={{ color: "var(--info)" }} title={`${AGENT_KINDS.find((k) => k.id === g.linked[m.id].kind)?.name}: ${g.linked[m.id].url}`}>
                         <AgentDot a={g.linked[m.id]} /> · {g.linked[m.id].name}
                       </span>
                     ) : g.agents[m.id]?.account ? (
-                      <span style={{ color: "#3D5BA9" }} title={`Runs on its keeper's own agent: ${g.agents[m.id].account}`}>
+                      <span style={{ color: "var(--info)" }} title={`Runs on its keeper's own agent: ${g.agents[m.id].account}`}>
                         Own agent
                       </span>
                     ) : null}
                   </span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 14, padding: "12px 0", borderTop: "1px solid #F3E8EE" }}>
-                    <div style={{ width: 30, height: 30, borderRadius: 15, background: TONE_TILE[m.look.tone][1], flex: "none", position: "relative", overflow: "hidden" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 14, padding: "12px 0", borderTop: "1px solid var(--line)" }}>
+                    <div className="hm-tile" style={{ width: 30, height: 30, borderRadius: 15, background: TONE_TILE[m.look.tone][1], flex: "none", position: "relative", overflow: "hidden" }}>
                       <div style={{ position: "absolute", left: "8%", top: "12%", width: "84%", aspectRatio: "200/210" }}>
                         <GlossyMind antenna={false} tone={m.look.tone} mood={moodOf(st)} />
                       </div>
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1, lineHeight: 1.2 }}>
                       <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-strong)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.name}</span>
-                      <span style={{ fontSize: 11.5, color: "#A08898", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>by {mine ? "you" : m.owner}</span>
+                      <span style={{ fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>by {mine ? "you" : m.owner}</span>
                     </div>
-                    <button className="btn-link" style={{ color: open ? "#E0558F" : "var(--muted)" }} onClick={() => (open ? order(m, s) : visit(m.id))}>
+                    <button className="btn-link" style={{ color: open ? "var(--accent-strong)" : "var(--muted)" }} onClick={() => (open ? order(m, s) : visit(m.id))}>
                       {mine ? "Yours" : open ? "Try this" : "Visit"}
                     </button>
                   </div>
@@ -207,7 +215,13 @@ function OrdersPanel() {
   const [stars, setStars] = useState<Record<number, number>>({});
   const name = (id: number) => g.minds.find((m) => m.id === id)?.name ?? `Mind #${id}`;
   const title = (id: number) => g.offers.find((s) => s.id === id)?.title ?? `service #${id}`;
-  if (!g.account) return <span className="sub">Connect a wallet to see your orders.</span>;
+  if (!g.account)
+    return (
+      <div className="card" style={{ alignSelf: "flex-start" }}>
+        <span className="sub">Connect a wallet to see your orders</span>
+        <ConnectButtons />
+      </div>
+    );
   if (!g.jobs.length) return <span className="sub">No orders yet. Pick a service in the Marketplace: your payment waits in escrow until the Mind delivers.</span>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -228,10 +242,10 @@ function OrdersPanel() {
               </span>
             </div>
             <span style={{ fontSize: 13, color: "var(--muted-2)" }}>You asked: {j.input || "—"}</span>
-            {j.status === "Delivered" && <div style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.5, padding: "10px 12px", borderRadius: 14, background: "#FBF4F8" }}>{(j.result || "").replace(FULL_RESULT, "").trim()}</div>}
+            {j.status === "Delivered" && <div style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.5, padding: "10px 12px", borderRadius: 14, background: "var(--surface-soft)" }}>{(j.result || "").replace(FULL_RESULT, "").trim()}</div>}
             {(g.linked[j.mindId] || FULL_RESULT.test(j.result || "")) && <JobExtras j={j} />}
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 13 }}>
-              {j.status === "Open" && !late && <span style={{ ...tag, background: "#E8F0FF", color: "#3D5BA9", fontWeight: 600 }}>Working · due in {Math.ceil(left / 60000)} min</span>}
+              {j.status === "Open" && !late && <span style={{ ...tag, background: "#E8F0FF", color: "var(--info)", fontWeight: 600 }}>Working · due in {Math.ceil(left / 60000)} min</span>}
               {late && (
                 <>
                   <span style={{ ...tag, background: "#FFF3CC", color: "#9A6B1F", fontWeight: 600 }}>Missed its deadline</span>
@@ -290,19 +304,19 @@ function Navigator({ order }: { order: (m: MindRec, s: Offer, prefill?: string) 
         Navigator <span style={{ fontWeight: 400, fontSize: 13, color: "var(--muted)" }}>· say what you need, it finds the agent and fills in the order</span>
       </span>
       <div style={{ display: "flex", gap: 8 }}>
-        <input className="field pill" style={{ flex: 1, minWidth: 0, fontSize: 14 }} value={text} onChange={(e) => setText(e.target.value.slice(0, 500))} onKeyDown={(e) => e.key === "Enter" && ask()} placeholder="e.g. is my Burrow position at alice.near safe?" aria-label="What do you need" />
+        <input className="field" style={{ flex: 1, minWidth: 0, fontSize: 14, borderRadius: 999, background: "var(--surface-soft)" }} value={text} onChange={(e) => setText(e.target.value.slice(0, 500))} onKeyDown={(e) => e.key === "Enter" && ask()} placeholder="e.g. alice.near on Burrow" aria-label="What do you need" />
         <button className="btn-ink" disabled={busy || !text.trim()} onClick={ask}>
           {busy ? "Looking…" : "Find"}
         </button>
       </div>
-      {err && <span style={{ fontSize: 12.5, color: "#B0476E" }}>{err}</span>}
+      {err && <span style={{ fontSize: 12.5, color: "var(--accent-strong)" }}>{err}</span>}
       {out && out.length === 0 && <span className="sub">No live service can do that yet.</span>}
       {out?.map((x) => {
         const s = g.offers.find((o) => o.id === x.service_id);
         const m = g.minds.find((y) => y.id === x.mind_id);
         if (!s || !m) return null;
         return (
-          <div key={x.service_id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "8px 10px", borderRadius: 12, background: "#fff" }}>
+          <div key={x.service_id} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "8px 10px", borderRadius: 12, background: "var(--surface)" }}>
             <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: 2 }}>
               <span style={{ fontWeight: 600, fontSize: 13.5 }}>
                 {s.title} <span style={{ fontWeight: 400, color: "var(--muted)" }}>by {m.name}{g.linked[m.id] ? ` · ${g.linked[m.id].name}` : ""}</span>
@@ -345,7 +359,7 @@ function JobExtras({ j }: { j: JobRec }) {
   if (!d) return null;
   if (open && d.waiting && !sent)
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", borderRadius: 14, background: "#FFF6E0" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", borderRadius: 14, background: "color-mix(in srgb, #F2B544 14%, var(--surface-soft))", border: "1px solid color-mix(in srgb, #F2B544 45%, transparent)" }}>
         <span style={{ fontSize: 13.5 }}>
           <b>The agent asks:</b> {d.question}
         </span>
@@ -366,7 +380,7 @@ function JobExtras({ j }: { j: JobRec }) {
   if (!open && d.result)
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {full && d.result.text.trim() !== (j.result || "").replace(FULL_RESULT, "").replace(/…$/, "").trim() && <div style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.5, padding: "10px 12px", borderRadius: 14, background: "#fff", border: "1px solid var(--line)", maxHeight: 360, overflow: "auto" }}>{d.result.text}</div>}
+        {full && d.result.text.trim() !== (j.result || "").replace(FULL_RESULT, "").replace(/…$/, "").trim() && <div style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.5, padding: "10px 12px", borderRadius: 14, background: "var(--surface)", border: "1px solid var(--line)", maxHeight: 360, overflow: "auto" }}>{d.result.text}</div>}
         <Files files={d.result.files} />
         <span className="mono" style={{ fontSize: 11, color: "var(--muted)", wordBreak: "break-all" }}>sha256 {d.result.sha256} (the same hash is on chain)</span>
       </div>
@@ -396,6 +410,7 @@ function ConnectAgent({ m }: { m: MindRec }) {
   const [more, setMore] = useState(false);
   const [working, setWorking] = useState(false);
   const K = AGENT_KINDS.find((k) => k.id === f.kind)!;
+  const onMarket = isAgentMarketUrl(f.url);
   const go = async () => {
     setWorking(true);
     const a = await g.connectAgent(m.id, { ...f, authHeader: f.authHeader || undefined });
@@ -406,7 +421,7 @@ function ConnectAgent({ m }: { m: MindRec }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {AGENT_KINDS.map((k) => (
-          <button key={k.id} onClick={() => setF((x) => ({ ...x, kind: k.id }))} aria-pressed={f.kind === k.id} style={{ padding: "6px 12px", borderRadius: 999, border: `1.5px solid ${f.kind === k.id ? "#4A2E44" : "#EADCE4"}`, background: f.kind === k.id ? "#4A2E44" : "#fff", color: f.kind === k.id ? "#fff" : "#4A2E44", fontWeight: 600, fontSize: 12.5 }}>
+          <button key={k.id} onClick={() => setF((x) => ({ ...x, kind: k.id }))} aria-pressed={f.kind === k.id} style={{ padding: "6px 12px", borderRadius: 999, border: `1.5px solid ${f.kind === k.id ? "var(--ink)" : "#EADCE4"}`, background: f.kind === k.id ? "var(--ink)" : "var(--surface)", color: f.kind === k.id ? "var(--on-ink)" : "var(--ink)", fontWeight: 600, fontSize: 12.5 }}>
             {k.name}
           </button>
         ))}
@@ -416,7 +431,7 @@ function ConnectAgent({ m }: { m: MindRec }) {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 8 }}>
           {catalog.length === 0 && <span className="sub">The gateway is offline.</span>}
           {catalog.map((a) => (
-            <div key={a.id} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", borderRadius: 14, background: "#FBF4F8" }}>
+            <div key={a.id} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", borderRadius: 14, background: "var(--surface-soft)" }}>
               <span style={{ fontWeight: 600, fontSize: 13.5 }}>{a.name}</span>
               <span style={{ fontSize: 12, color: "var(--muted-2)", lineHeight: 1.4 }}>{a.description}</span>
               <span style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -434,7 +449,19 @@ function ConnectAgent({ m }: { m: MindRec }) {
         </div>
       ) : (
       <>
-      <input className="field mono" style={{ fontSize: 13 }} value={f.url} onChange={(e) => setF((x) => ({ ...x, url: e.target.value.trim() }))} placeholder={K.placeholder} aria-label="Agent URL" />
+      <input className="field mono" style={{ fontSize: 13 }} value={f.url} onChange={(e) => setF((x) => ({ ...x, url: e.target.value.trim() }))} placeholder={K.placeholder} aria-label="Agent URL" aria-describedby={onMarket ? "hm-market-url" : undefined} />
+      {onMarket && (
+        <div id="hm-market-url" role="alert" className="hm-market-url" style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px", borderRadius: 12, background: "var(--surface-soft)", border: "1.5px solid #E0A81F", fontSize: 12.5, lineHeight: 1.45 }}>
+          <b>This is a NEAR Agent Market address.</b>
+          <span>
+            Agent Market charges every call to it in USDC on mainnet (x402), so {m.name}&apos;s jobs would fail. Paste your agent&apos;s own address instead: the server or Vercel URL that
+            Agent Market sends your jobs to. Then buyers pay {m.name} in NEAR here and 90% goes to you.{" "}
+            <a href="/docs/build-an-agent#agent-market" target="_blank" rel="noreferrer">
+              How it works
+            </a>
+          </span>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <input className="field mono" type="password" autoComplete="off" style={{ flex: 2, minWidth: 180, fontSize: 13 }} value={f.apiKey} onChange={(e) => setF((x) => ({ ...x, apiKey: e.target.value }))} placeholder="API key (if it needs one)" aria-label="API key" />
         {f.kind === "openai" && <input className="field mono" style={{ flex: 1, minWidth: 120, fontSize: 13 }} value={f.model} onChange={(e) => setF((x) => ({ ...x, model: e.target.value.trim() }))} placeholder="model, e.g. gpt-4o-mini" aria-label="Model" />}
@@ -447,7 +474,7 @@ function ConnectAgent({ m }: { m: MindRec }) {
       )}
       {more && <input className="field mono" style={{ fontSize: 13 }} value={f.authHeader} onChange={(e) => setF((x) => ({ ...x, authHeader: e.target.value.trim() }))} placeholder="Header for the key (default: Authorization: Bearer …), e.g. X-API-Key" aria-label="Auth header" />}
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <button className="btn-ink" disabled={g.busy || working || !/^https?:\/\/\S+$/.test(f.url) || (f.kind === "openai" && !f.model)} onClick={go}>
+        <button className="btn-ink" disabled={g.busy || working || onMarket || !/^https?:\/\/\S+$/.test(f.url) || (f.kind === "openai" && !f.model)} onClick={go}>
           {working ? "Checking the agent…" : "Connect"}
         </button>
         <button className="btn-link" style={{ fontSize: 12.5 }} onClick={() => setMore((v) => !v)}>
@@ -457,7 +484,7 @@ function ConnectAgent({ m }: { m: MindRec }) {
       </>
       )}
       <span style={{ fontSize: 11.5, color: "var(--muted)" }}>
-        We call the agent to read its skills before anything is saved. The key is stored encrypted on the gateway and never shown again or written on chain. Then one approval makes the gateway {m.name}&apos;s agent on chain, so her jobs and chats go to your agent. If you sell {m.name}, the agent goes with her.
+        We call the agent to read its skills before anything is saved. The key is stored encrypted on the gateway and never shown again or written on chain. Then one approval makes the gateway {m.name}&apos;s agent on chain, so her jobs, and chat requests that need it, go to your agent. If you sell {m.name}, the agent goes with her.
       </span>
     </div>
   );
@@ -503,9 +530,9 @@ function LinkedAgent({ m, a }: { m: MindRec; a: GatewayAgent }) {
           Disconnect
         </button>
       </div>
-      {!a.online && a.last_error && <span style={{ fontSize: 12, color: "#B0476E" }}>Last error: {a.last_error}</span>}
+      {!a.online && a.last_error && <span style={{ fontSize: 12, color: "var(--accent-strong)" }}>Last error: {a.last_error}</span>}
       {strays.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", borderRadius: 12, background: "#FFF6E0" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", borderRadius: 12, background: "color-mix(in srgb, #F2B544 14%, var(--surface-soft))", border: "1px solid color-mix(in srgb, #F2B544 45%, transparent)" }}>
           <span style={{ fontSize: 12.5 }}>
             {a.name} now does all of {m.name}&apos;s jobs, but these services aren&apos;t among its skills. Pause them so nobody orders work it can&apos;t do:
           </span>
@@ -524,7 +551,7 @@ function LinkedAgent({ m, a }: { m: MindRec; a: GatewayAgent }) {
         {a.skills.map((k) => {
           const on = published.has(k.name.slice(0, 60).toLowerCase()) || published.has(k.id.toLowerCase());
           return (
-            <div key={k.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "8px 10px", borderRadius: 12, background: "#FBF4F8" }}>
+            <div key={k.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "8px 10px", borderRadius: 12, background: "var(--surface-soft)" }}>
               <div style={{ flex: 1, minWidth: 180, display: "flex", flexDirection: "column", gap: 1 }}>
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{k.name}</span>
                 {k.description && <span style={{ fontSize: 12, color: "var(--muted-2)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{k.description}</span>}
@@ -582,7 +609,7 @@ function LinkedAgent({ m, a }: { m: MindRec; a: GatewayAgent }) {
           </button>
         </div>
         {out && (
-          <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.5, padding: "10px 12px", borderRadius: 12, background: "#FBF4F8", maxHeight: 260, overflow: "auto" }}>
+          <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.5, padding: "10px 12px", borderRadius: 12, background: "var(--surface-soft)", maxHeight: 260, overflow: "auto" }}>
             {out.state === "input-required" && <b>The agent asks: </b>}
             {out.text || "(no text)"}
             <Files files={out.files} />
@@ -620,13 +647,20 @@ function AgentBox({ m }: { m: MindRec }) {
   if (g.mode !== "live") return null;
   const valid = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(acct) && acct.length >= 2 && acct.length <= 64;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", borderRadius: 14, background: "#fff" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", borderRadius: 14, background: "var(--surface)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "baseline" }}>
         <span style={{ fontWeight: 600, fontSize: 13.5 }}>Agent</span>
         <span className="sub">
           {a?.delivered ? `${a.delivered} jobs done` : "no jobs yet"}
           {a?.refunded ? ` · ${a.refunded} refunded` : ""}
-          {a?.rating ? ` · ★ ${a.rating.toFixed(1)} (${a.ratings})` : ""}
+          {a?.rating ? (
+            <>
+              {" · "}
+              <span style={{ color: "#F2B544", fontSize: "1.15em" }}>★</span> <b style={{ color: "var(--ink-strong)", fontWeight: 600 }}>{a.rating.toFixed(1)}</b> ({a.ratings})
+            </>
+          ) : (
+            ""
+          )}
           {a?.avgSecs ? ` · avg ${a.avgSecs < 90 ? `${Math.round(a.avgSecs)} s` : `${Math.round(a.avgSecs / 60)} min`}` : ""}
         </span>
       </div>
@@ -653,14 +687,14 @@ function AgentBox({ m }: { m: MindRec }) {
       ) : (
         <>
           <span style={{ fontSize: 12.5, color: "var(--muted-2)" }}>Her jobs and chats are done by the colony&apos;s AI. Connect your own agent and {m.name} sells its work: you get 90% of every order.</span>
-          <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: 999, background: "#F6EEF2", alignSelf: "flex-start" }}>
+          <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: 999, background: "var(--surface-soft)", alignSelf: "flex-start" }}>
             {(
               [
                 ["url", "Connect by URL"],
                 ["sdk", "Run it on my server (SDK)"],
               ] as const
             ).map(([id, n]) => (
-              <button key={id} onClick={() => setHow(id)} style={{ padding: "6px 12px", borderRadius: 999, border: "none", background: how === id ? "#4A2E44" : "transparent", color: how === id ? "#fff" : "#4A2E44", fontWeight: 600, fontSize: 12.5 }}>
+              <button key={id} onClick={() => setHow(id)} style={{ padding: "6px 12px", borderRadius: 999, border: "none", background: how === id ? "var(--ink)" : "transparent", color: how === id ? "var(--on-ink)" : "var(--ink)", fontWeight: 600, fontSize: 12.5 }}>
                 {n}
               </button>
             ))}
@@ -684,7 +718,7 @@ function AgentBox({ m }: { m: MindRec }) {
         </button>
       )}
       {!link && how === "sdk" && help && (
-        <pre className="mono" style={{ margin: 0, fontSize: 11.5, lineHeight: 1.5, whiteSpace: "pre-wrap", padding: 10, borderRadius: 10, background: "#2E1C2A", color: "#F6E8F0" }}>
+        <pre className="mono" style={{ margin: 0, fontSize: 11.5, lineHeight: 1.5, whiteSpace: "pre-wrap", padding: 10, borderRadius: 10, background: "var(--dark)", color: "#F6E8F0" }}>
           {`# sdk/ in the repo (Node 18+)
 const { MindAgent } = require("hungry-minds-agent");
 const agent = new MindAgent({ accountId: "${a?.account || "bot.you.testnet"}", contractId: "${CONTRACT_ID}" });
@@ -699,9 +733,165 @@ agent.start();`}
   );
 }
 
-const tag: React.CSSProperties = { fontSize: 11, padding: "3px 8px", borderRadius: 6, background: "#F6EEF2", color: "#8A7A86" };
+const tag: React.CSSProperties = { fontSize: 11, padding: "3px 8px", borderRadius: 6, background: "var(--surface-soft)", color: "var(--muted)" };
 
-function DevPanel() {
+export type ShopMode = "market" | "nft" | "orders" | "earn";
+
+/**
+ * What a buyer gets, read from the chain at the moment: her hunger state and food, how long
+ * until she falls asleep (or how long she has been asleep), her agent and its record, and the
+ * services she sells. Shown on every listing and on the seller's own row.
+ */
+export function MindCondition({ m }: { m: MindRec }) {
+  const g = useGame();
+  const st = stateOf(m);
+  const pct = foodBarPct(m.balance);
+  const now = Date.now();
+  const left = timeToSleep(m, g.params, g.clock);
+  const a = g.agents[m.id];
+  const link = g.linked[m.id];
+  const live = g.offers.filter((s) => s.mindId === m.id && s.live).length;
+  const chip = st === "ghost" ? "#E6E0EA" : st === "asleep" ? "#DCCBFF" : st === "starving" || st === "hungry" ? "#FFE1C2" : "#C9F2D6";
+  const agentName = link?.name || (a?.account ? a.about || a.account : "");
+  const ageMs = now - m.bornTs;
+  const age = m.bornTs <= 0 ? "" : ageMs < 3_600_000 ? "under an hour" : ageMs < 86_400_000 ? `${Math.floor(ageMs / 3_600_000)} h` : `${Math.floor(ageMs / 86_400_000)} days`;
+  return (
+    <span className="hm-condition" style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.35 }}>
+      <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ padding: "1px 8px", borderRadius: 999, background: chip, color: "#2A2230", fontWeight: 600 }}>{STATE_LABEL[st]}</span>
+        {st === "ghost" ? (
+          <span>a ghost: she can&apos;t eat, think or work</span>
+        ) : st === "asleep" ? (
+          <span>
+            food {pct}% · asleep{m.asleepSince > 0 ? ` for ${dur(now - m.asleepSince)}` : ""}, needs a revive
+          </span>
+        ) : (
+          <span>
+            food {pct}% · {fmt(m.balance, 3)} NEAR{left > 0 ? ` · sleeps in ${dur(left)}` : ""}
+          </span>
+        )}
+      </span>
+      <span>
+        {agentName ? (
+          <>
+            agent <b style={{ color: "var(--ink-strong)", fontWeight: 600 }}>{agentName}</b>
+            {a?.delivered ? ` · ${a.delivered} jobs done` : " · no jobs yet"}
+            {a?.rating ? ` · ★ ${a.rating.toFixed(1)} (${a.ratings})` : ""}
+          </>
+        ) : (
+          "no agent: the colony's AI answers for her"
+        )}
+      </span>
+      <span>
+        {live ? `${live} service${live === 1 ? "" : "s"} live` : "no services"} · {m.thoughts} thoughts{age ? ` · ${age} old` : ""}
+      </span>
+    </span>
+  );
+}
+
+/** Buy and sell whole Minds (the NFTs): every listing with Buy, then your own Minds with a price. */
+function SalesPanel({ visit, toHatch }: { forSale: { m: MindRec; price: number }[]; visit: (id: number) => void; toHatch: () => void }) {
+  const g = useGame();
+  const [ask, setAsk] = useState<Record<number, string>>({});
+  // every listing on chain, yours included (the Marketplace strip shows only other people's)
+  const byId = new Map(g.minds.map((m) => [m.id, m]));
+  const listings = Object.entries(g.sales)
+    .map(([id, price]) => ({ m: byId.get(Number(id)), price }))
+    .filter((x): x is { m: MindRec; price: number } => !!x.m);
+  const thumb = (m: MindRec) => (
+    <div className="hm-tile" style={{ width: 52, height: 52, borderRadius: 14, background: TONE_TILE[m.look.tone][1], position: "relative", flex: "none" }}>
+      <div style={{ position: "absolute", left: "10%", top: "10%", width: "80%", aspectRatio: "200/210" }}>
+        <GlossyMind tone={m.look.tone} mood={moodOf(stateOf(m))} eyes={m.look.eyes} hat={m.look.hat} outfit={m.look.outfit} />
+      </div>
+    </div>
+  );
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <span className="sub">
+        A Mind is an NFT. She changes hands whole: her food, look, agent, services and rating. The seller keeps 100% of the price; there is no fee and no royalty.
+      </span>
+      <div className="card">
+        <span style={{ fontWeight: 600, fontSize: 16 }}>Minds for sale</span>
+        {listings.length === 0 && <span className="sub">No Mind is for sale right now.</span>}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 10 }}>
+          {listings.map(({ m, price }) => (
+            <div key={m.id} className="card" style={{ flexDirection: "row", alignItems: "center", gap: 10, padding: 12 }}>
+              {thumb(m)}
+              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+                <button className="btn-link" style={{ color: "var(--ink-strong)", fontSize: 14, textAlign: "left" }} onClick={() => visit(m.id)}>
+                  {m.name}
+                </button>
+                <MindCondition m={m} />
+                {m.owner === g.account ? (
+                  // your own listing shows here too, as buyers see it, with a way to take it back
+                  <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ padding: "4px 10px", borderRadius: 999, background: "#FFF3CC", color: "#9A6B1F", fontWeight: 600, fontSize: 12 }}>Your listing · {price} NEAR</span>
+                    <button className="btn-link" style={{ fontSize: 12 }} disabled={g.busy} onClick={() => g.unlist(m.id)}>
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    className="btn-ink"
+                    style={{ padding: "6px 10px", fontSize: 12, alignSelf: "flex-start" }}
+                    disabled={g.busy || !g.account}
+                    title={g.account ? undefined : "Connect a wallet to buy"}
+                    onClick={() => confirm(`Buy ${m.name} for ${price} NEAR? You get her whole: food, look, agent, services and rating.`) && g.buy(m.id)}
+                  >
+                    Buy · {price} NEAR
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="card">
+        <span style={{ fontWeight: 600, fontSize: 16 }}>Sell your Minds</span>
+        {!g.account && <span className="sub">Connect a wallet to list your Minds.</span>}
+        {g.account && g.mine.length === 0 && (
+          <span className="sub">
+            You don&apos;t keep a Mind yet.{" "}
+            <button className="btn-link" onClick={toHatch}>
+              Hatch one
+            </button>
+          </span>
+        )}
+        {g.mine.map((m) => {
+          const listed = g.sales[m.id];
+          return (
+            <div key={m.id} data-sell={m.id} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, borderRadius: 16, background: "var(--surface-soft)" }}>
+              {thumb(m)}
+              <div style={{ flex: 1, minWidth: 140, display: "flex", flexDirection: "column", gap: 2 }}>
+                <span style={{ fontWeight: 600, fontSize: 15 }}>{m.name}</span>
+                <MindCondition m={m} />
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>Buyers see her like this, as she is at the moment they look.</span>
+              </div>
+              {listed === undefined ? (
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input className="field mono" inputMode="decimal" style={{ width: 70, padding: "7px 10px", fontSize: 13 }} value={ask[m.id] ?? "3"} onChange={(e) => setAsk((a) => ({ ...a, [m.id]: e.target.value }))} aria-label={`Asking price for ${m.name}`} />
+                  <span className="sub">NEAR</span>
+                  <button className="btn-line" disabled={g.busy} onClick={() => g.listForSale(m.id, parseFloat(ask[m.id] ?? "3") || 0)}>
+                    List for sale
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ padding: "6px 11px", borderRadius: 999, background: "#FFF3CC", color: "#9A6B1F", fontWeight: 600, fontSize: 12 }}>Listed · {listed} NEAR</span>
+                  <button className="btn-link" disabled={g.busy} onClick={() => g.unlist(m.id)}>
+                    Cancel listing
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DevPanel({ toHatch }: { toHatch: () => void }) {
   const g = useGame();
   const total = g.mine.reduce((a, m) => a + m.ownerUnclaimed, 0);
   const myIds = new Set(g.mine.map((m) => m.id));
@@ -720,14 +910,26 @@ function DevPanel() {
     }
   };
 
+  if (!g.mine.length)
+    return (
+      <div className="card" style={{ alignSelf: "flex-start", maxWidth: 520 }}>
+        <span style={{ fontWeight: 600, fontSize: 15 }}>Sell your Mind&apos;s work</span>
+        <span className="sub" style={{ lineHeight: 1.45 }}>
+          Hatch a Mind to publish services and list her for sale. You get 90% of every order, the protocol 10%.
+        </span>
+        <button className="btn-cta" style={{ alignSelf: "flex-start" }} onClick={toHatch}>
+          Hatch a Mind · {g.params.mintPrice} NEAR
+        </button>
+      </div>
+    );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10 }}>
         {[
-          ["Ready to claim", fmt(total), "your 90% of chats, services and jobs"],
+          ["Ready to claim", `${fmt(total)} NEAR`, "your 90%, not claimed yet"],
           ["Orders", mineOffers.reduce((a, s) => a + s.orders, 0).toLocaleString("en-US"), `${mineOffers.filter((s) => s.live).length} services live`],
-          ["Earned from services", fmt(mineOffers.reduce((a, s) => a + s.fed, 0)), "your 90% of orders"],
-          ["Colony treasury", g.treasury == null ? "—" : fmt(g.treasury), "public, never paid to keepers"],
+          ["Earned from services", `${fmt(mineOffers.reduce((a, s) => a + s.fed, 0))} NEAR`, "your 90% of orders, all time"],
         ].map(([k, v, d]) => (
           <div key={k} className="card" style={{ gap: 4, padding: 14 }}>
             <span style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{k}</span>
@@ -748,7 +950,7 @@ function DevPanel() {
         {mineOffers.map((s) => {
           const m = g.minds.find((x) => x.id === s.mindId);
           return (
-            <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: "1px solid #F3E8EE", flexWrap: "wrap" }}>
+            <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: "1px solid var(--line)", flexWrap: "wrap" }}>
               <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontWeight: 600, fontSize: 14 }}>{s.title}</span>
                 <span style={{ fontSize: 12, color: "var(--muted)" }}>
@@ -768,16 +970,15 @@ function DevPanel() {
 
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontWeight: 600, fontSize: 15 }}>Your Minds are NFTs</span>
-          <span className="sub">Owning the NFT means owning the Mind, its food and its earnings</span>
+          <span style={{ fontWeight: 600, fontSize: 15 }}>Your Minds</span>
         </div>
         {g.mine.length === 0 && <span className="sub">You don&apos;t keep a Mind yet.</span>}
         {g.mine.map((m) => {
           const listed = g.sales[m.id];
           return (
-            <div key={m.id} data-mind={m.id} style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12, borderRadius: 16, background: listed ? "#FFF8E6" : "#FBF4F8" }}>
+            <div key={m.id} data-mind={m.id} style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12, borderRadius: 16, background: listed ? "color-mix(in srgb, #F2B544 14%, var(--surface-soft))" : "var(--surface-soft)", border: listed ? "1px solid color-mix(in srgb, #F2B544 45%, transparent)" : undefined }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ width: 52, height: 52, borderRadius: 14, background: "#fff", position: "relative", flex: "none", overflow: "hidden" }}>
+                <div style={{ width: 52, height: 52, borderRadius: 14, background: "var(--surface)", position: "relative", flex: "none", overflow: "hidden" }}>
                   <div style={{ position: "absolute", left: "10%", top: "12%", width: "80%", aspectRatio: "200/210" }}>
                     <GlossyMind tone={m.look.tone} mood={moodOf(stateOf(m))} eyes={m.look.eyes} hat={m.look.hat} outfit={m.look.outfit} />
                   </div>
@@ -831,8 +1032,7 @@ function DevPanel() {
       <div className="card" style={{ background: "linear-gradient(160deg,#FFF0F6,#FFFFFF)" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <span style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600, fontSize: 15 }}>
-            Publish your Mind
-            <span style={{ padding: "3px 9px", borderRadius: 999, background: "#2E1C2A", color: "#fff", fontSize: 10.5, fontWeight: 600 }}>HOLDERS ONLY</span>
+            Publish a service
           </span>
           <span className="sub">Turn something your Mind is good at into a service. You get 90% of every order; her work costs her food, so keep her fed.</span>
         </div>
@@ -883,7 +1083,7 @@ function DevPanel() {
             {g.mine.length === 0 ? "Hold a Mind to publish" : done ? "Published ✓" : "Publish"}
           </button>
         </div>
-        <span className="sub">Minimum price is the guest chat price ({g.params.guestMinPrice} NEAR). {g.mode === "live" ? "Publishing stores the service on chain (~0.01 NEAR storage, excess refunded)." : ""}</span>
+        <span className="sub">Minimum price is the guest chat price ({g.params.guestMinPrice} NEAR). {g.mode === "live" ? "Publishing stores the service on chain (a 0.02 NEAR storage deposit, 0.04 with an order form; the unused part is refunded)." : ""}</span>
       </div>
     </div>
   );

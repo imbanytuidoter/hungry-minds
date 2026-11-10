@@ -791,3 +791,12 @@ a {
     order: -1;
   }
 }
+
+/* Growing greenery (components/Greenery.tsx): the stem draws itself, leaves unfold after it passes them. */
+@property --g { syntax: "<number>"; inherits: true; initial-value: 0; }
+.gv { display: block; width: auto; aspect-ratio: 120 / 400; overflow: visible; --g: 0; transition: --g 2.8s cubic-bezier(0.3, 0.7, 0.2, 1); filter: drop-shadow(0 6px 8px rgba(30, 60, 30, 0.18)); }
+.gv.on { --g: 1; }
+.gv-driven { transition: none; --g: inherit; }
+.gv-stem { stroke-dasharray: 1; stroke-dashoffset: calc(1 - var(--g)); opacity: clamp(0, calc(var(--g) * 40), 1); }
+.gv-leaf { transform-box: fill-box; transform-origin: 0% 50%; transform: scale(clamp(0, calc((var(--g) - var(--t)) * 7), 1)); }
+@media (prefers-reduced-motion: reduce) { .gv, .gv.on { --g: 1; transition: none; } }

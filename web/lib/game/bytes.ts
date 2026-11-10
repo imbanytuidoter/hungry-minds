@@ -21,5 +21,16 @@ export function clipBytes(s: string, max: number): string {
   return out;
 }
 
+/** Like clipBytes, for text a person reads (an agent's skill description): when it has to be
+ *  cut, it ends on a whole word with an ellipsis, still within `max` bytes. */
+export function clipWords(s: string, max: number): string {
+  const t = s.trim();
+  if (utf8Len(t) <= max) return t;
+  const head = clipBytes(t, max - utf8Len("…"));
+  const space = head.lastIndexOf(" ");
+  const cut = space > head.length * 0.6 ? head.slice(0, space) : head;
+  return `${cut.replace(/[\s,.;:–-]+$/, "")}…`;
+}
+
 /** Contract limits (contract.rs / colony.rs). */
 export const LIMITS = { name: 32, title: 60, desc: 200, unit: 16, message: 500 } as const;

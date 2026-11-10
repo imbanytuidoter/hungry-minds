@@ -1,7 +1,7 @@
 // Drive the real site UI (QA build on :3001, QA contract) as one player, checking the chain
 // after every action.  node drive.js e2e-ui.js <role> <account> [mindName]
-//   role "owner": hatch, feed, chat, publish a service, claim, list for sale
-//   role "guest": order the owner's service, then buy the listed Mind
+//   roles: owner (hatch, feed, chat, publish a service, claim), guest, guestchat, agentjob,
+//   sell (list for sale), buy (buy the listed Mind), sold (the seller's view after the sale)
 const os = require("os");
 const SITE = "http://localhost:3001/app";
 const C = "hm-qa-q1103b.testnet";
@@ -27,7 +27,15 @@ module.exports = async (b, [role, account, name = "UiQa"]) => {
   await b.goto(SITE);
   await b.js("window.confirm = () => true");
   ok(!!(await b.until(`document.body.innerText.includes(${JSON.stringify(account)}) || document.body.innerText.includes("Make your own")`, 30000)), "site loads signed in", account);
-  const rows = async () => (await view("colony_snapshot")).minds.map((r) => ({ id: r.id, ...r.mind }));
+  // every Mind, page by page: a snapshot holds at most 60, and each run hatches one more
+  const rows = async () => {
+    const all = [];
+    for (let from = 0; ; from += 60) {
+      const s = await view("colony_snapshot", { from_index: from, limit: 60 });
+      all.push(...s.minds.map((r) => ({ id: r.id, ...r.mind })));
+      if (!s.minds.length || from + 60 >= s.total_minds) return all;
+    }
+  };
   const snapMine = async () => (await rows()).filter((m) => m.owner === account);
 
   if (role === "owner") {
@@ -57,13 +65,17 @@ module.exports = async (b, [role, account, name = "UiQa"]) => {
     ok(look.hat === 6 && look.outfit === 1, "the picked look is stored on chain", JSON.stringify(look));
     await b.shot(process.env.SHOT_DIR + "/ui-1-home.png");
 
-    // feed (Strawberry 0.10 -> 0.095 to her)
     const f0 = BigInt((await view("get_mind", { id: me.id })).balance);
+    // each food card says how much of her Food bar it fills (one Dream swirl of food, 0.0475 NEAR, is 100%)
+    const gains = await b.js(`[...document.querySelectorAll('.hm-food-gain')].map(x => x.textContent.trim()).join(' | ')`);
+    ok(gains === "+10% food | +50% food | +100% food", "food cards show how much each one fills her up", gains);
+    const after = await b.js(`document.querySelector('.hm-feed-after')?.textContent.trim() || ''`);
+    ok(/Food \d+% → \d+% · pays for ≈ 2 replies/.test(after), "the feed panel shows her food before and after this meal", after);
     out.push("  " + (await b.click(`Feed ${name}`)));
     let f1 = f0;
     for (let i = 0; i < 40 && f1 === f0; i++) { await b.sleep(1500); f1 = BigInt((await view("get_mind", { id: me.id })).balance); }
-    // the default meal is one Pea pod (0.01 NEAR): 95% of it reaches her
-    ok(Math.abs(N(f1 - f0) - 0.0095) < 0.0001, "Feed button: 0.01 NEAR -> +0.0095 food on chain", `+${N(f1 - f0)}`);
+    // the default meal is one Pea pod (0.005 NEAR): 95% of it reaches her
+    ok(Math.abs(N(f1 - f0) - 0.00475) < 0.00001, "Feed button: 0.005 NEAR -> +0.00475 food on chain", `+${N(f1 - f0)}`);
 
     // owner chat
     out.push("  " + (await b.click("/^Chat$/")));
@@ -86,8 +98,8 @@ module.exports = async (b, [role, account, name = "UiQa"]) => {
     // pick this Mind in the form (a keeper with several Minds gets a picker)
     out.push("  " + (await b.js(`(() => { const s = document.querySelector('select[aria-label="Mind"]'); if (!s) return 'no picker'; const o = [...s.options].find(o => o.textContent.includes(${JSON.stringify(name)})); if (!o) return 'no option'; Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, o.value); s.dispatchEvent(new Event('change', { bubbles: true })); return 'picked ' + o.textContent.trim(); })()`)));
     await b.sleep(400);
-    // everything inside the "Publish your Mind" card (agent skill rows have their own Price + Publish)
-    const form = `[...document.querySelectorAll(".card")].find(c => c.innerText.includes("Publish your Mind"))`;
+    // everything inside the "Publish a service" card (agent skill rows have their own Price + Publish)
+    const form = `[...document.querySelectorAll(".card")].find(c => c.innerText.includes("Publish a service"))`;
     const fill = (sel, v) => b.js(`(() => { const root = ${form}; const el = root && root.querySelector(${JSON.stringify(sel)}); if (!el) return "NOT FOUND " + ${JSON.stringify(sel)}; const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), "value").set; set.call(el, ${JSON.stringify(v)}); el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); return "typed"; })()`);
     out.push("  " + (await fill('input[aria-label="Service name"]', "UI joke")));
     out.push("  " + (await fill('textarea[aria-label="Description"]', "One short joke about anything.")));
@@ -153,8 +165,9 @@ module.exports = async (b, [role, account, name = "UiQa"]) => {
     const got = await b.until(`[...document.querySelectorAll('[aria-live] > div')].length >= 2 && !document.querySelector('.hm-dots')`, 120000);
     ok(!!got, "guest message answered without a wallet popup", (await b.text()).match(/messages? left/)?.[0] || "");
     // with a NEAR AI key in worker/.env the reply comes from the TEE model and carries its proof
+    // (not on a --no-near-ai run: the QA worker then uses the free open model on purpose)
     const envFile = require("path").resolve(__dirname, "../../worker/.env");
-    if (require("fs").existsSync(envFile) && /^NEAR_AI_KEY=\S+/m.test(require("fs").readFileSync(envFile, "utf8"))) {
+    if (process.env.NEAR_AI !== "off" && require("fs").existsSync(envFile) && /^NEAR_AI_KEY=\S+/m.test(require("fs").readFileSync(envFile, "utf8"))) {
       const badge = await b.until(`(document.body.innerText.match(/Verified · NEAR AI TEE · [^\\n]+|NEAR AI · [^\\n]+ · unsigned/) || [null])[0]`, 15000);
       ok(/^Verified/.test(badge || ""), "the reply is signed by NEAR AI's TEE and shows Verified", badge || "no badge");
     }
@@ -224,6 +237,8 @@ module.exports = async (b, [role, account, name = "UiQa"]) => {
       inp.dispatchEvent(new Event('input', { bubbles: true }));
       return 'row ready';
     })()`)));
+    // the Claim transaction keeps the panel busy for a moment: a click on a disabled button does nothing
+    await b.until(`[...document.querySelectorAll('button')].some(x => x.textContent.trim() === 'List for sale' && !x.disabled)`, 30000);
     await b.sleep(400);
     out.push("  " + (await b.js(`(() => { const inp = [...document.querySelectorAll('input[aria-label="Asking price"]')].find((i) => { let e = i; while (e.parentElement && e.parentElement.querySelectorAll('input[aria-label="Asking price"]').length === 1) e = e.parentElement; return e.innerText.includes(${JSON.stringify(name)}); }); const btn = inp && [...inp.parentElement.querySelectorAll('button')].find(x => x.textContent.trim() === 'List for sale'); if (!btn) return 'NO LIST BUTTON'; btn.click(); return 'clicked List for sale (' + inp.value + ')'; })()`)));
     let listed;
@@ -236,12 +251,38 @@ module.exports = async (b, [role, account, name = "UiQa"]) => {
     const target = (await rows()).find((x) => x.name === name);
     out.push("  " + (await b.click("/^Shop$/")));
     await b.until(`document.body.innerText.includes(${JSON.stringify(name)})`, 20000);
-    out.push("  " + (await b.js(`(() => { const btn = [...document.querySelectorAll('button')].find(x => x.textContent.trim().startsWith('Buy') && x.closest('div') && x.closest('div').parentElement.innerText.includes(${JSON.stringify(name)})); if (!btn) return 'NO BUY BUTTON'; btn.click(); return 'clicked ' + btn.textContent.trim(); })()`)));
+    // the listing shows her condition as the chain has it now
+    const pct = Math.min(100, Math.round((N((await view("get_mind", { id: target.id })).balance) / 0.0475) * 100));
+    await b.until(`[...document.querySelectorAll('.hm-condition')].some(x => x.closest('.card') && x.closest('.card').innerText.includes(${JSON.stringify(name)}))`, 20000);
+    const cond = await b.js(`(() => { const c = [...document.querySelectorAll('.hm-condition')].find(x => x.closest('.card') && x.closest('.card').innerText.includes(${JSON.stringify(name)})); return c ? c.innerText.replace(/\\s+/g, ' ') : ''; })()`);
+    ok(cond.includes(`food ${pct}%`) && /thoughts/.test(cond) && /(agent|no agent)/.test(cond), "the listing shows her state, food, agent and services", cond);
+    out.push("  " + (await b.js(`(() => { const btn = [...document.querySelectorAll('button')].find(x => x.textContent.trim().startsWith('Buy ·') && x.closest('div') && x.closest('div').parentElement.innerText.includes(${JSON.stringify(name)})); if (!btn) return 'NO BUY BUTTON'; btn.click(); return 'clicked ' + btn.textContent.trim(); })()`)));
     let owner = target.owner;
     for (let i = 0; i < 40 && owner !== account; i++) { await b.sleep(1500); owner = (await view("get_mind", { id: target.id })).owner; }
     ok(owner === account, "Buy button: the Mind and NFT move to the buyer", owner);
     ok(!(await view("listings")).some((l) => l.id === target.id), "listing cleared after the sale");
     await b.shot(process.env.SHOT_DIR + "/ui-5-bought.png");
+    return out;
+  }
+
+  // the seller comes back after a real sale on chain (same browser profile as "sell", which
+  // remembers the Minds it saw): the "has a new owner" card, then the two ways to a new Mind
+  if (role === "sold") {
+    const target = (await rows()).find((x) => x.name === name);
+    ok(!!target && target.owner !== account, "the Mind belongs to the buyer now", target?.owner);
+    const card = await b.until(`!!document.querySelector(".hm-sold")`, 40000);
+    ok(!!card, "seller sees the sold card after the real sale");
+    const text = card ? await b.js(`document.querySelector(".hm-sold").innerText`) : "";
+    ok(text.includes(name) && text.includes(target?.owner || "?"), "card names the Mind and the new owner", text.replace(/\s+/g, " ").slice(0, 120));
+    const opts = await b.js(`[...document.querySelectorAll(".hm-sold .hm-getmind-opt")].map(x => x.innerText.split("\\n")[0].trim())`);
+    ok(JSON.stringify(opts) === JSON.stringify(["Hatch a new Mind", "Buy a grown Mind"]), "card offers hatch and buy", JSON.stringify(opts));
+    await b.shot(process.env.SHOT_DIR + "/ui-6-sold.png");
+    await b.js(`(() => { const o = document.querySelectorAll(".hm-sold .hm-getmind-opt")[1]; if (o) o.click(); return "ok"; })()`);
+    await b.sleep(1500);
+    ok(await b.js(`!document.querySelector(".hm-sold") && document.body.innerText.includes("Sell your Minds")`), "Buy a grown Mind opens the marketplace");
+    await b.goto(SITE);
+    await b.sleep(6000);
+    ok(!(await b.js(`!!document.querySelector(".hm-sold")`)), "the card does not come back after a reload");
     return out;
   }
   return "unknown role";

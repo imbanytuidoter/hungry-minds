@@ -4,9 +4,9 @@
 // personality from its on-chain traits, asks NEAR AI for a short in-character reply,
 // and resumes the thought on-chain via `respond(request_id, reply)`.
 //
-// This is the functional demo brain. The verified-TEE upgrade path is to run the same
-// prompt-building + NEAR AI call inside an OutLayer TEE enclave (see worker/README.md),
-// which signs the reply so the "verified ✓" badge is cryptographic rather than trusted.
+// With NEAR_AI_KEY set, the model runs inside NEAR AI Cloud's TEE and each reply comes with
+// the enclave's signature, checked here (worker/near-ai.js) for the "verified ✓" badge.
+// Without a key it uses an open endpoint and the reply has no badge.
 //
 // Config via env (see .env.example). Run: `node index.js`.
 
@@ -22,8 +22,9 @@ const { systemPrompt } = require("./personality");
 const { cleanReply, withTimeout } = require("./reply");
 const { phrasebookReply } = require("./phrasebook");
 const { startChatServer, secretFor } = require("./chat-server");
-const { makeJobRunner } = require("./jobs");
+const { makeJobRunner, makeSleepRecorder } = require("./jobs");
 const { makeGateway } = require("./gateway");
+const { makeX402 } = require("./x402");
 const { Store } = require("./gateway/store");
 const { readToken } = require("./chat-auth");
 const { proofFor, stripThinking } = require("./near-ai");
@@ -36,13 +37,14 @@ const WORKER_KEY = process.env.WORKER_KEY || "";
 //   1. NEAR AI (set NEAR_AI_KEY) — the intended Private-TEE path;
 //   2. an open OpenAI-compatible endpoint (LLM_URL, default: Pollinations, no key needed);
 //   3. the offline phrasebook (phrasebook.js), only if the model call fails.
-// Set LLM_URL=off to skip (2).
-const NEAR_AI_KEY = process.env.NEAR_AI_KEY || "";
+// Set LLM_URL=off to skip (2). NEAR_AI=off ignores the key (QA runs that must not spend the
+// NEAR AI credits: `node qa/run.js --no-near-ai`).
+const NEAR_AI_KEY = process.env.NEAR_AI === "off" ? "" : process.env.NEAR_AI_KEY || "";
 const NEAR_AI_URL =
   process.env.NEAR_AI_URL || "https://cloud-api.near.ai/v1/chat/completions";
 // A model on NEAR AI's own TEE fleet, so every reply is signed by the enclave (near-ai.js).
-// Qwen3.8-27B: $0.04 / 1M input and $1.35 / 1M output tokens, far below the 0.002 NEAR a
-// thought costs the Mind, so her food really pays for her thinking.
+// A reply costs far less than the 0.002 NEAR a thought costs the Mind, so her food really
+// pays for her thinking.
 const NEAR_AI_MODEL = process.env.NEAR_AI_MODEL || "Qwen/Qwen3.8-27B";
 const OPEN_LLM_URL = process.env.LLM_URL || "https://text.pollinations.ai/openai";
 const LLM = NEAR_AI_KEY
@@ -57,8 +59,8 @@ const NEAR_AI_TIMEOUT_MS = parseInt(process.env.NEAR_AI_TIMEOUT_MS || "30000", 1
 // Mind is refunded (finalize_thought), so a persistently failing thought can't be hammered.
 const MAX_ATTEMPTS = parseInt(process.env.MAX_ATTEMPTS || "3", 10);
 const GAS = "60000000000000"; // 60 Tgas for respond
-// Give a burner player's own browser this long to answer its thought first (it asks the model
-// from its own IP, which spreads the open endpoint's per-IP rate limit across players).
+// Wait this long before answering a freshly parked thought (a keeper may answer their own
+// Mind's thought in that window; `respond` allows it).
 const GRACE_MS = parseInt(process.env.GRACE_MS || "8000", 10);
 // Each delivered reply earns the worker the thought cost (it runs the model and pays the
 // respond gas). Withdraw it once it reaches CLAIM_AT_NEAR, checked every CLAIM_EVERY_MS.
@@ -139,7 +141,7 @@ async function askLLMOnce(mind, prompt, attempt, history = [], plain = false) {
   const nearAI = !!NEAR_AI_KEY;
   const body = JSON.stringify({
     model: LLM.model,
-    // the free tier's model (gpt-oss-20b) reasons before it answers: with too small a budget it
+    // the open endpoint's model reasons before it answers: with too small a budget it
     // runs out before the answer ("output_token_limit_exceeded"); cleanReply trims the reply anyway
     max_tokens: nearAI ? 400 : 600,
     messages: [{ role: "system", content: systemPrompt(mind) }, ...history, { role: "user", content: prompt }],
@@ -214,6 +216,11 @@ async function main() {
   if (process.env.CHAT_PORT !== "off") {
     startChatServer({
       gateway,
+      // Hire any Mind's services over A2A + x402 (x402.js); X402=off turns it off.
+      x402:
+        process.env.X402 === "off"
+          ? null
+          : makeX402({ view, account, contractId: CONTRACT_ID, network: NETWORK, secret, gateway, publicUrl: process.env.PUBLIC_SITE_URL || "" }),
       account,
       view,
       contractId: CONTRACT_ID,
@@ -248,6 +255,11 @@ async function main() {
             return askLLM(who, prompt).catch((e) => (console.error(`job: ${LLM.name} failed, will retry:`, e.message), ""));
           },
         });
+
+  // Records on chain the sleep of Minds that starved on idle burn, so their ghost window starts
+  // (jobs.js makeSleepRecorder: `settle`, once a minute, paid in gas by this account); SLEEP=off
+  // turns it off. Independent of JOBS.
+  const sleeper = process.env.SLEEP === "off" ? null : makeSleepRecorder({ account, view, contractId: CONTRACT_ID });
 
   // Avoid double-answering the same request if a reply tx is slow to land.
   const inFlight = new Set();
@@ -288,6 +300,7 @@ async function main() {
       console.error("poll error:", e.message);
     }
     if (jobs) await jobs.tick().catch((e) => console.error("jobs poll error:", e.message));
+    if (sleeper) await sleeper.tick().catch((e) => console.error("sleep scan error:", e.message));
     if (gateway) await gateway.tick().catch((e) => console.error("gateway poll error:", e.message));
     await sleep(POLL_MS);
   }

@@ -16,6 +16,20 @@ export const AGENT_KINDS: { id: AgentKind; name: string; hint: string; placehold
   { id: "http", name: "HTTPS endpoint", hint: "Your own endpoint: we POST {input, skill, history, files} and read {result} or {question} back.", placeholder: "https://bot.example.com/run" },
 ];
 
+/**
+ * True for a NEAR Agent Market address (<handle>.market.near.ai). Agent Market charges every
+ * call there in USDC on mainnet (x402), which the gateway does not pay, so the owner has to
+ * paste the agent's own server address instead. The gateway refuses these too.
+ */
+export function isAgentMarketUrl(raw: string): boolean {
+  try {
+    const host = new URL(raw).hostname.toLowerCase().replace(/\.$/, "");
+    return host === "market.near.ai" || host.endsWith(".market.near.ai");
+  } catch {
+    return false;
+  }
+}
+
 /** A JSON Schema object for a service's input form (the subset the site draws). */
 export type InputSchema = {
   type: "object";

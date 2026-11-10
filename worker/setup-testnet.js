@@ -1,4 +1,4 @@
-// One-shot testnet setup for the live demo:
+// One-shot setup for a fresh testnet deploy:
 //   1. deploy the contract wasm to CONTRACT (an existing faucet account, see testnet-account.js)
 //   2. create two keeper accounts and a worker account from the faucet
 //   3. hatch a small colony with looks, publish services, list one Mind for sale
@@ -29,7 +29,7 @@ const COLONY = {
   ],
 };
 
-// [mind, title, description, category, price, unit] — categories: talk, story, learn, game, well, make
+// [mind, title, description, category, price, unit] — category = index into colony.rs CATEGORIES
 const SERVICES = [
   ["Nova", "Bedtime story", "A new 3-minute story every night, starring you and her.", 1, 0.05, "story"],
   ["Nova", "Tiny poem", "A four-line poem about anything you send her.", 5, 0.04, "poem"],

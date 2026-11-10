@@ -37,6 +37,18 @@ const headT = (y: number) => {
 };
 /** Half-width of the head at height y (y between 38 and 120). */
 const half = (y: number) => 100 - bez(HEAD, headT(y))[0];
+// Right half of the body's bottom: (174,120) down to (100,186); the left half is its mirror.
+const LOW: Pt[] = [[174, 120], [174, 162], [144, 186], [100, 186]];
+/** Half-width of the body at height y (y between 120 and 186). */
+const lowHalf = (y: number) => {
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 40; i++) {
+    const m = (lo + hi) / 2;
+    if (bez(LOW, m)[1] < y) lo = m;
+    else hi = m;
+  }
+  return bez(LOW, lo)[0] - 100;
+};
 /**
  * The head's own outline from the left side at height y, over the crown, to the right side,
  * grown by g about the body's centre — the exact shape of a cap pulled over the head.
@@ -114,9 +126,10 @@ export function hats(n: number): Shape[] {
   // Party cone: base corners sit on the head; stripes are cut exactly to the cone's sides.
   const cone = (y: number) => (36 * (y + 12)) / 62;
   const stripe = (y1: number, y2: number) => `M${pt([100 - cone(y1), y1])} L${pt([100 + cone(y1), y1])} L${pt([100 + cone(y2), y2])} L${pt([100 - cone(y2), y2])}Z`;
-  // Witch hat: the band follows the curved cone exactly.
-  const wl: Pt[] = [[64, 62], [92, 30], [110, -16]];
-  const wr: Pt[] = [[110, -16], [120, 22], [136, 62]];
+  // Witch hat: the cone is wide enough at the base to cover the top of the head, and the band
+  // follows the curved cone exactly.
+  const wl: Pt[] = [[48, 60], [74, 30], [110, -16]];
+  const wr: Pt[] = [[110, -16], [124, 22], [152, 60]];
   const wBand = (y1: number, y2: number) =>
     `M${pt([quadX(wl[0], wl[1], wl[2], y2), y2])} L${pt([quadX(wl[0], wl[1], wl[2], y1), y1])} L${pt([quadX(wr[0], wr[1], wr[2], y1), y1])} L${pt([quadX(wr[0], wr[1], wr[2], y2), y2])}Z`;
   const V: (Shape[] | null)[] = [
@@ -134,24 +147,36 @@ export function hats(n: number): Shape[] {
       F(C(79, 46, 4), "#7FE0AE"),
       F(C(121, 46, 4), "#7FB8FF"),
     ],
-    [F("M68 -2 H132 V60 Q100 70 68 60Z", D), F("M68 36 H132 V46 H68Z", "#FF6FA3"), F("M46 56 Q100 70 154 56", "none", D, 10)],
+    // Top hat: the brim sits where the head is as wide as the crown, so the head hides under it.
+    [F("M68 -12 H132 V50 Q100 60 68 50Z", D), F("M68 26 H132 V36 H68Z", "#FF6FA3"), F("M46 45 Q100 59 154 45", "none", D, 10)],
     [
       F("M46 60 Q100 20 154 60", "none", "#3FB97C", 5),
-      ...([[49, 59, "#FF85B5"], [72, 45.4, "#FFD84D"], [100, 40, W], [128, 45.4, "#FF85B5"], [151, 59, "#FFD84D"]] as [number, number, string][]).flatMap(([x, y, c]) => [F(C(x, y, 9), c), F(C(x, y, 3.5), "#E6A92A")]),
+      // colours mirror about the middle, so the wreath never looks lopsided
+      ...([[49, 59, "#FF85B5"], [72, 45.4, "#FFD84D"], [100, 40, W], [128, 45.4, "#FFD84D"], [151, 59, "#FF85B5"]] as [number, number, string][]).flatMap(([x, y, c]) => [F(C(x, y, 9), c), F(C(x, y, 3.5), "#E6A92A")]),
     ],
     [
-      F(`${cap.d} Q100 82 ${pt(cap.l)}Z`, "#FF6FA3"),
-      F("M110 77 Q150 72 182 80 Q162 92 112 86Z", "#E2508E"),
+      // the crown's lower corners round back onto the head instead of poking past it
+      F(`${cap.d} Q163.6 71.6 160 72 Q100 78.5 40 72 Q36.4 71.6 ${pt(cap.l)}Z`, "#FF6FA3"),
+      // the visor grows out of the crown's edge (its root lies inside the crown, so no gap shows)
+      // and ends in a rounded bill past the right side of the head
+      F("M104 72.5 Q133 72 162 65.5 Q180 62 187 70 Q184 83 158 86 Q124 88 104 74Z", "#E2508E"),
       F("M100 36 V74", "none", "#E2508E", 2.5),
       F(C(100, 34, 5), "#E2508E"),
     ],
     [F("M100 40 L70 22 L72 58Z", "#FF5C93"), F("M100 40 L130 22 L128 58Z", "#FF5C93"), F(C(100, 40, 8), "#E2508E")],
     [
-      F("M30 62 Q100 44 170 62 Q100 80 30 62Z", "#4A2E6B"),
-      F("M64 62 Q92 30 110 -16 Q120 22 136 62Z", "#5B3A80"),
-      F(wBand(48, 56), "#FFD84D"),
+      F("M26 60 Q100 40 174 60 Q100 80 26 60Z", "#4A2E6B"),
+      F("M48 60 Q74 30 110 -16 Q124 22 152 60 Q100 72 48 60Z", "#5B3A80"),
+      F(wBand(44, 52), "#FFD84D"),
     ],
-    [F("M48 74 L56 20 L92 46Z", "#FF85B5"), F("M152 74 L144 20 L108 46Z", "#FF85B5"), F("M58 60 L62 32 L80 46Z", "#FFD0E3"), F("M142 60 L138 32 L120 46Z", "#FFD0E3")],
+    // Cat ears: each base follows the head's own arc, so the ears grow out of the outline
+    // instead of lying across the forehead.
+    [
+      F("M45.4 62 L56 18 L88 38.8 Q63.3 44 45.4 62Z", "#FF85B5"),
+      F("M154.6 62 L144 18 L112 38.8 Q136.7 44 154.6 62Z", "#FF85B5"),
+      F("M53 52 L58 28 L78 40Z", "#FFD0E3"),
+      F("M147 52 L142 28 L122 40Z", "#FFD0E3"),
+    ],
     [F(El(100, 14, 40, 10), "none", "#FFD84D", 6), F(El(100, 14, 40, 10), "none", "rgba(255,255,255,.6)", 2)],
   ];
   return V[n] || [];
@@ -201,15 +226,30 @@ export const onTone = (list: Shape[], tone: number): Shape[] => {
  * wraps around the body is drawn past its sides, and the clip trims it to the silhouette.
  */
 export function outfits(n: number): Shape[] {
-  // A necklace from one side of the body to the other, sagging across the chest.
-  const arc = (k: number, r: number, cols: string[]) =>
-    Array.from({ length: k }, (_, i) => {
+  // A necklace from one side of the body to the other, sagging across the chest. The end beads
+  // sit just inside the silhouette (the clip would otherwise cut them into slivers at the sides).
+  const arc = (k: number, r: number, cols: string[]) => {
+    const reach = lowHalf(146) - r - 1;
+    return Array.from({ length: k }, (_, i) => {
       const t = i / (k - 1);
-      return F(C(r1(31 + t * 138), r1(146 + Math.sin(t * Math.PI) * 24), r), cols[i % cols.length], "rgba(0,0,0,.08)", 1);
+      // colours mirror about the middle bead, so both ends of the string match
+      return F(C(r1(100 - reach + t * 2 * reach), r1(146 + Math.sin(t * Math.PI) * 24), r), cols[Math.min(i, k - 1 - i) % cols.length], "rgba(0,0,0,.08)", 1);
     });
+  };
   const V: (Shape[] | null)[] = [
     null,
-    [F("M10 140 Q100 172 190 140 L190 158 Q100 190 10 158Z", "#FF6FA3"), F("M112 166 L114 182 L128 180 L126 164Z", "#E2508E")],
+    // Scarf: a knitted band round the neck (shade along its lower edge, a light rim on top),
+    // tied at the front: a round knot and two separate tails with fringed ends.
+    [
+      F("M10 136 Q100 168 190 136 L190 152 Q100 184 10 152Z", "#FF6FA3"),
+      F("M10 150 Q100 182 190 150", "none", "#E2508E", 4),
+      F("M10 138 Q100 170 190 138", "none", "rgba(255,255,255,.35)", 2),
+      F("M112 163 Q106 174 103 185 L116 186 Q118 175 121 165Z", "#E2508E"),
+      F("M122 164 Q130 172 136 182 L147 175 Q140 166 129 160Z", "#FF6FA3", "#E2508E", 1.5),
+      F("M105 182 l-1 4 M109 183 l0 4 M113 183 l1 4 M137 180 l-1 4 M141 178 l0 4 M145 175 l1 4", "none", "#E2508E", 1.6),
+      F(El(120, 162, 9, 7), "#FF6FA3", "#E2508E", 2),
+      F("M115 160 q5 -3 10 0", "none", "rgba(255,255,255,.4)", 1.6),
+    ],
     [F("M100 162 L78 150 L78 174Z", D), F("M100 162 L122 150 L122 174Z", D), F(C(100, 162, 5), "#4A2E44")],
     [
       F("M10 136 Q100 170 190 136 L190 146 Q140 160 100 180 Q60 160 10 146Z", "#E2508E"),
@@ -219,22 +259,26 @@ export function outfits(n: number): Shape[] {
       F(C(100, 174, 2.5), W),
     ],
     [
+      // Overalls: the bib's top and the pocket seam bow down with the body like the waist does,
+      // and the straps sag round the body and leave it above the arms, over the shoulders.
       F("M10 164 Q100 184 190 164 V200 H10Z", "#3F6AD8"),
-      F("M76 182 V152 Q100 148 124 152 V182Z", "#3F6AD8"),
-      F("M78 154 L22 132 M122 154 L178 132", "none", "#3F6AD8", 6),
-      F("M88 160 H112", "none", "#2F55B8", 2.5),
+      F("M76 182 V152 Q100 156 124 152 V182Z", "#3F6AD8"),
+      F("M80 154 Q52 150 27 122 M120 154 Q148 150 173 122", "none", "#3F6AD8", 6),
+      F("M88 161 Q100 163 112 161", "none", "#2F55B8", 2.5),
       F(C(80, 156, 3.5), "#FFD84D"),
       F(C(120, 156, 3.5), "#FFD84D"),
     ],
     [
       F("M10 140 Q100 178 190 140 V200 H10Z", "#A78BFA"),
       F("M10 138 Q100 176 190 138", "none", "#C4B2FF", 7),
-      F("M76 180 Q100 174 124 180 L128 196 H72Z", "#9273EE"),
-      F("M90 162 l-2 16 M110 162 l2 16", "none", W, 3),
+      // the kangaroo pocket sits on the tummy, inside the outline; the strings hang from the collar
+      F("M76 168 Q100 165 124 168 L127 180 Q100 184 73 180Z", "#9273EE"),
+      F("M91 158 l-1 9 M109 158 l1 9", "none", W, 3),
     ],
     arc(15, 5, [W, "#FFF4E8"]),
     [F("M28 138 Q64 160 96 168 M172 138 Q136 160 104 168", "none", "#3F6AD8", 6), F(C(100, 173, 10), "#FFD25E", "#E6A92A", 2.5), F(C(100, 173, 4), "#FFF4C2")],
-    [F("M10 148 Q100 184 190 148 V200 H10Z", "#FFD84D"), F("M10 148 Q100 184 190 148", "none", "#FF6FA3", 6), F("M10 172 Q100 204 190 172", "none", "#FF6FA3", 5)],
+    // Stripes: both stripes lie on the body, each with yellow on either side so they read on any tone.
+    [F("M10 136 Q100 172 190 136 V200 H10Z", "#FFD84D"), F("M10 146 Q100 182 190 146", "none", "#FF6FA3", 5), F("M10 158 Q100 194 190 158", "none", "#FF6FA3", 5)],
     [F("M94 148 h12 l-2 9 h-8Z", "#3F6AD8"), F("M96 157 h8 l6 18 l-10 8 l-10 -8Z", "#3F6AD8"), F("M97 167 l6 -4 M96 176 l8 -5", "none", "#7FB8FF", 2.5)],
     arc(11, 8, ["#FF85B5", "#FFD84D", "#7FE0AE", "#7FB8FF"]),
   ];

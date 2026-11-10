@@ -24,7 +24,8 @@ const args = new Set(process.argv.slice(2));
 // --only="agent by url": run just the steps whose name contains this (servers still start;
 // combine with --skip-build); such a run never stamps
 const ONLY = (process.argv.find((a) => a.startsWith("--only=")) || "").slice(7).toLowerCase();
-const CARGO_BIN = process.env.CARGO_BIN || "D:/dev/.cargo/bin";
+// cargo comes from PATH; CARGO_BIN puts another toolchain first
+const CARGO_BIN = process.env.CARGO_BIN || "";
 const TOOLCHAIN = process.env.RUST_TOOLCHAIN || "+stable-x86_64-pc-windows-gnu";
 const WASM = path.join(REPO, "contract/target/wasm32-unknown-unknown/release/hungry_minds_contract.wasm");
 const PORTS = { chat: 8789, site: 3001, a2a: 9911 };
@@ -35,7 +36,10 @@ const log = (s) => {
   fs.appendFileSync(LOG, s + "\n");
 };
 const results = [];
-const env = { ...process.env, PATH: `${CARGO_BIN}${path.delimiter}${process.env.PATH}`, NEAR_RPC: RPC, SHOT_DIR: OUT };
+const env = { ...process.env, PATH: CARGO_BIN ? `${CARGO_BIN}${path.delimiter}${process.env.PATH}` : process.env.PATH, NEAR_RPC: RPC, SHOT_DIR: OUT };
+// --no-near-ai: the QA worker answers with the free open model instead of NEAR AI, so a run
+// spends none of the NEAR AI credits (the Verified-badge check is skipped then)
+if (args.has("--no-near-ai")) env.NEAR_AI = "off";
 
 /** Run a command to the end; record a step that passes on exit 0 (and no FAIL lines). Steps
  *  that lean on outside services (Polymarket, DeepWiki, NEAR RPC, the open model) pass
@@ -53,7 +57,7 @@ let lastPass = 0;
 function run(name, cmd, cmdArgs, opts) {
   log(`\n=== ${name}`);
   const t = Date.now();
-  const r = spawnSync(cmd, cmdArgs, { cwd: opts.cwd || REPO, env: { ...env, ...(opts.env || {}) }, shell: true, encoding: "utf8", timeout: opts.timeout || 900_000, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync(cmd, cmdArgs, { windowsHide: true, cwd: opts.cwd || REPO, env: { ...env, ...(opts.env || {}) }, shell: true, encoding: "utf8", timeout: opts.timeout || 900_000, maxBuffer: 64 * 1024 * 1024 });
   const text = `${r.stdout || ""}${r.stderr || ""}`;
   fs.appendFileSync(LOG, text);
   const lines = text.split(/\r?\n/);
@@ -74,12 +78,12 @@ function run(name, cmd, cmdArgs, opts) {
 // ── servers the suites need, started and stopped here ──
 const servers = [];
 function freePort(port) {
-  spawnSync("powershell", ["-NoProfile", "-Command", `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -ne 0 } | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }`], { encoding: "utf8" });
+  spawnSync("powershell", ["-NoProfile", "-Command", `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -ne 0 } | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }`], { windowsHide: true, encoding: "utf8" });
 }
 function start(name, cmd, cmdArgs, cwd, extraEnv, port) {
   freePort(port);
   const out = fs.openSync(path.join(OUT, `${name}.log`), "w");
-  const p = spawn(cmd, cmdArgs, { cwd, env: { ...env, ...extraEnv }, shell: true, stdio: ["ignore", out, out] });
+  const p = spawn(cmd, cmdArgs, { windowsHide: true, cwd, env: { ...env, ...extraEnv }, shell: true, stdio: ["ignore", out, out] });
   servers.push({ name, p, port });
   return p;
 }
@@ -97,7 +101,7 @@ async function waitFor(url, ms = 90_000) {
   return false;
 }
 function stopAll() {
-  for (const s of servers) spawnSync("taskkill", ["/PID", String(s.p.pid), "/T", "/F"], { encoding: "utf8" });
+  for (const s of servers) spawnSync("taskkill", ["/PID", String(s.p.pid), "/T", "/F"], { encoding: "utf8", windowsHide: true });
   for (const s of servers) freePort(s.port);
 }
 
@@ -112,6 +116,23 @@ async function topUps() {
   const bank = await near.account(BANK);
   const nearOf = async (id) => Number(BigInt((await (await near.account(id)).state()).amount) / 10n ** 21n) / 1000;
   const want = [["alice-q1103.testnet", 6], ["bob-q1103.testnet", 3], ["alice-q1103b.testnet", 1]];
+  // The QA keepers' Minds earn from every run (guest chat, jobs) and nobody claims it, so the test
+  // NEAR piles up in the contract. Claim it, and send what a keeper has above its own need to the bank.
+  const minds = [];
+  for (let from = 0; ; from += 60) {
+    const s = await bank.viewFunction({ contractId: QA, methodName: "colony_snapshot", args: { from_index: from, limit: 60 } });
+    minds.push(...s.minds);
+    if (s.minds.length < 60) break;
+  }
+  for (const [id, min] of want) {
+    const mine = minds.filter((x) => x.mind.owner === id && BigInt(x.mind.owner_unclaimed || "0") >= 5n * 10n ** 22n);
+    if (!mine.length) continue;
+    const acc = await near.account(id);
+    for (const x of mine) await acc.functionCall({ contractId: QA, methodName: "claim_earnings", args: { id: x.id }, gas: "30000000000000", attachedDeposit: "0" });
+    const spare = Math.floor((await nearOf(id)) - (min + 2));
+    if (spare > 0) await acc.sendMoney(BANK, BigInt(utils.format.parseNearAmount(String(spare))));
+    log(`  ${id} claimed its QA Minds' earnings (${mine.length} Minds)${spare > 0 ? `, ${spare} NEAR to the bank` : ""}`);
+  }
   let need = 2; // keep a little in the bank for gas
   for (const [id, min] of want) need += Math.max(0, Math.ceil(min + 1 - (await nearOf(id))));
   const have = await nearOf(BANK);
@@ -127,11 +148,67 @@ async function topUps() {
   for (const [id, min] of want) {
     const bal = await nearOf(id);
     if (bal < min) {
-      const give = Math.ceil(min + 1 - bal);
+      // give what the bank can spare: a partial top-up still lets most suites run
+      const give = Math.min(Math.ceil(min + 1 - bal), Math.floor((await nearOf(BANK)) - 1));
+      if (give <= 0) { log(`  ${id}: ${bal.toFixed(2)} NEAR, the bank is empty: top up ${BANK} by hand`); continue; }
       await bank.sendMoney(id, BigInt(utils.format.parseNearAmount(String(give))));
       log(`  topped up ${id}: ${bal.toFixed(2)} + ${give} NEAR`);
     } else log(`  ${id}: ${bal.toFixed(2)} NEAR`);
   }
+}
+
+// ── QA buyers close their finished orders ──
+// The contract refuses a 51st order that is not closed (agents.rs order_job), and several suites
+// order without closing, so every run starts by closing what is finished (Delivered/Refunded).
+// Each close returns the job's 0.03 NEAR deposit to the buyer. `dry` only counts.
+const QA_BUYERS = ["alice-q1103.testnet", "alice-q1103b.testnet", "bob-q1103.testnet"];
+async function closeFinishedJobs(dry = false) {
+  const { connect, keyStores } = require(path.join(REPO, "worker/node_modules/near-api-js"));
+  const near = await connect({ networkId: "testnet", nodeUrl: RPC, keyStore: new keyStores.UnencryptedFileSystemKeyStore(path.join(os.homedir(), ".near-credentials")) });
+  for (const id of QA_BUYERS) {
+    try {
+      const acc = await near.account(id);
+      const jobs = await acc.viewFunction({ contractId: QA, methodName: "jobs_of", args: { account_id: id } });
+      const done = jobs.filter((j) => j.status !== "Open");
+      if (!dry) for (const j of done) await acc.functionCall({ contractId: QA, methodName: "close_job", args: { job_id: j.id }, gas: "30000000000000", attachedDeposit: "0" });
+      log(`  ${id}: ${jobs.length} orders not closed, ${dry ? "would close" : "closed"} ${done.length} finished`);
+    } catch (e) {
+      log(`  ${id}: closing finished orders failed: ${e.message}`);
+    }
+  }
+}
+// ── the suites' shared test Mind must be awake ──
+// Every agent/order suite works with bob-q1103's Mind #4 (UiQa2). Minds burn food just by living
+// (about 0.02 NEAR a day), so between runs she starves to sleep and every order fails with
+// "she is asleep". Her keeper feeds her first, as a real owner would (95% becomes her food).
+const TEST_MINDS = [4];
+async function feedTestMinds() {
+  const { connect, keyStores, utils } = require(path.join(REPO, "worker/node_modules/near-api-js"));
+  const near = await connect({ networkId: "testnet", nodeUrl: RPC, keyStore: new keyStores.UnencryptedFileSystemKeyStore(path.join(os.homedir(), ".near-credentials")) });
+  const keeper = await near.account("bob-q1103.testnet");
+  const fmt = (y) => (Number(BigInt(y) / 10n ** 18n) / 1e6).toFixed(3);
+  for (const id of TEST_MINDS) {
+    try {
+      const m = await keeper.viewFunction({ contractId: QA, methodName: "get_mind", args: { id } });
+      if (!m || m.ghost) {
+        log(`  Mind #${id}: ${m ? "a ghost" : "missing"}, can't be fed: the agent suites will fail`);
+        continue;
+      }
+      const live = BigInt((await keeper.viewFunction({ contractId: QA, methodName: "live_balance", args: { id } })) || "0");
+      if (live >= 50_000_000_000_000_000_000_000n) {
+        log(`  Mind #${id} ${m.name}: ${fmt(live)} NEAR of food`);
+        continue;
+      }
+      await keeper.functionCall({ contractId: QA, methodName: "feed", args: { id }, gas: "50000000000000", attachedDeposit: utils.format.parseNearAmount("0.1") });
+      log(`  Mind #${id} ${m.name}: had ${fmt(live)} NEAR of food, her keeper fed her 0.1 NEAR`);
+    } catch (e) {
+      log(`  Mind #${id}: feeding failed: ${e.message}`);
+    }
+  }
+}
+if (require.main === module && process.argv.includes("--count-orders")) {
+  closeFinishedJobs(true).then(() => process.exit(0));
+  return;
 }
 
 (async () => {
@@ -152,7 +229,15 @@ async function topUps() {
       step("QA site build", "npx", ["next", "build"], { cwd: path.join(REPO, "web"), env: { NEXT_DIST_DIR: ".next-qa", NEXT_PUBLIC_CONTRACT_ID: QA, NEXT_PUBLIC_QA_SIGNIN: "1", NODE_OPTIONS: "--max-old-space-size=6144" } });
     }
     log("\n=== test accounts");
-    await topUps().catch((e) => log("  top-up failed: " + e.message));
+    // a public RPC hiccup ("Internal server error") must not leave the test accounts dry
+    for (let i = 1; i <= 3; i++) {
+      const err = await topUps().then(() => null, (e) => e);
+      if (!err) break;
+      log(`  top-up attempt ${i} failed: ${err.message}`);
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+    await closeFinishedJobs();
+    await feedTestMinds();
 
     // 3. the servers
     start("qa-worker", "node", ["index.js"], path.join(REPO, "worker"), { CONTRACT_ID: QA, WORKER_ID: "hm-worker-19652a.testnet", CHAT_PORT: String(PORTS.chat), GATEWAY_ALLOW_LOCAL: "1", POLL_MS: "4000", GRACE_MS: "20000" }, PORTS.chat);
@@ -168,16 +253,20 @@ async function topUps() {
       step("connector kinds (HTTPS, OpenAI-compatible)", "node", ["chain/kinds-test.js"], { cwd: __dirname, needPass: true, retry: 1 });
       step("SDK agent end to end", "node", ["chain/agents-e2e.js"], { cwd: __dirname, needPass: true, retry: 1 });
       step("gateway: A2A + MCP end to end", "node", ["chain/gateway-e2e.js", "all"], { cwd: __dirname, needPass: true, retry: 1, timeout: 1_200_000 });
+      step("x402: hire a Mind over A2A, gasless", "node", ["chain/x402-e2e.js"], { cwd: __dirname, needPass: true, retry: 1 });
 
       // 5. the real site in Chrome
       if (!args.has("--no-ui")) {
-        const ui = (name, file, role, account, extra = []) => step(name, "node", ["drive.js", file, role, account, ...extra], { cwd: __dirname, needPass: true, retry: 1, env: { PROFILE: path.join(os.tmpdir(), `hm-qa-${role}-${account.split(".")[0]}`) } });
+        // prof: whose browser profile to use (default: one per role), retry: 0 for a step that can only be seen once
+        const ui = (name, file, role, account, extra = [], { prof = role, retry = 1 } = {}) => step(name, "node", ["drive.js", file, role, account, ...extra], { cwd: __dirname, needPass: true, retry, env: { PROFILE: path.join(os.tmpdir(), `hm-qa-${prof}-${account.split(".")[0]}`) } });
         const fresh = `Qa${Date.now().toString(36).slice(-5)}`;
         ui("game: hatch, feed, chat, publish", "ui/e2e-ui.js", "owner", "bob-q1103.testnet", [fresh]);
         ui("game: guest orders the service", "ui/e2e-ui.js", "guest", "alice-q1103.testnet", [fresh]);
         ui("game: guest chat credits", "ui/e2e-ui.js", "guestchat", "alice-q1103.testnet", [fresh]);
         ui("game: claim and list for sale", "ui/e2e-ui.js", "sell", "bob-q1103.testnet", [fresh]);
         ui("game: buy the Mind", "ui/e2e-ui.js", "buy", "alice-q1103.testnet", [fresh]);
+        // the seller's own browser (the "sell" profile) sees the real sale once
+        ui("game: seller sees the sale, then the marketplace", "ui/e2e-ui.js", "sold", "bob-q1103.testnet", [fresh], { prof: "sell", retry: 0 });
         ui("agent by URL: owner connects", "ui/agent-ui.js", "keeper", "bob-q1103.testnet");
         ui("agent by URL: buyer orders, answers, gets a file", "ui/agent-ui.js", "buyer", "alice-q1103.testnet");
         ui("official agent: owner connects and publishes", "ui/agent-ui2.js", "keeper", "bob-q1103.testnet");
@@ -192,7 +281,7 @@ async function topUps() {
     // 6. the live site, read only (skipped when it isn't running)
     if (!args.has("--no-ui") && (await waitFor("http://localhost:3000/app", 3000))) {
       step("live: first visit", "node", ["drive.js", "ui/e2e-main.js"], { cwd: __dirname, needPass: true });
-      step("live: every tab in every language", "node", ["drive.js", "ui/e2e-sweep.js", "http://localhost:3000"], { cwd: __dirname });
+      step("live: every tab", "node", ["drive.js", "ui/e2e-sweep.js", "http://localhost:3000"], { cwd: __dirname });
     } else log("\n=== live site not running on :3000: live smoke skipped");
   } finally {
     stopAll();

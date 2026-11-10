@@ -1,6 +1,6 @@
 // The Minds' brain, server side: build the persona prompt and ask the model. Calls are queued
-// (one at a time) and rate limits are waited out rather than skipped, because a thought
-// stays parked on chain for ~200 blocks — there is time to get a real reply.
+// (one at a time) and rate limits are waited out rather than skipped, so a reply is a real
+// one.
 
 import { systemPrompt, type Persona } from "@/lib/game/brain";
 

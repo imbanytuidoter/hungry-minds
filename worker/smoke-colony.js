@@ -1,4 +1,4 @@
-// Smoke-test the colony methods on the live deploy with the seeded keeper accounts:
+// Smoke-test the colony methods on a deploy made by setup-testnet.js, with its keeper accounts:
 // set_look, list_for_sale / unlist, set_service_live.
 //   node smoke-colony.js <contract>.testnet <suffix>
 const { ensureAccount } = require("./testnet-account");

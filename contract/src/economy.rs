@@ -1,16 +1,16 @@
 //! Pure money-split logic (yoctoNEAR). Fixed splits + the DEFAULT values for the
-//! governable price parameters per build plan §16.3.
+//! governable price parameters.
 //!
 //! Every split CONSERVES the deposit (integer-division remainders are routed so
-//! nothing is created or lost), and the Mind's own balance is favoured for the
-//! remainder — it is the thing that must stay solvent.
+//! nothing is created or lost): the remainder goes to the Mind (feed, revive) or to
+//! the owner (guest split).
 //!
 //! The three *prices* below (`THOUGHT_COMPUTE_COST`, `GUEST_PRICE`, `REVIVE_PRICE`)
 //! are no longer hardcoded into the live methods: the `Contract` stores a live copy
 //! of each, seeded from these consts, and the contract account may retune them
-//! (see `Contract::set_*`). Economy design flag #1: the thought cost is a peg to the
+//! (see `Contract::set_*`). The thought cost is a peg to the
 //! real inference cost × NEAR price and MUST be tunable, never frozen. The split
-//! *ratios* (hatch 1/0.25/rest, feed 95/5, guest 90/10, revive) stay fixed here.
+//! *ratios* (hatch 0.1/0.25/rest, feed 95/5, guest 90/10, revive) stay fixed here.
 
 use crate::state::ONE_NEAR;
 
@@ -29,15 +29,15 @@ pub const THOUGHT_COMPUTE_COST: u128 = ONE_NEAR / 500; // 0.002 NEAR
 /// the default — far beyond any real inference peg, yet still a floor of ~10 thoughts/NEAR.
 pub const MAX_THOUGHT_COST: u128 = ONE_NEAR / 10; // 0.1 NEAR
 
-/// DEFAULT minimum a stranger must attach to `chat`. It guarantees the guest covers the
-/// thought they trigger — guest_split(GUEST_PRICE).to_mind = 0.007 NEAR, well above the
-/// default THOUGHT_COMPUTE_COST — so a free-rider can never drain a Mind's own food.
+/// DEFAULT minimum a stranger must attach to `chat`. The owner's 90% of it (0.009 NEAR) is
+/// well above the thought the guest triggers (paid from her food), so a guest always pays
+/// more than the food their reply costs.
 /// Governable: seeds `Contract::guest_min_price`.
 pub const GUEST_PRICE: u128 = ONE_NEAR / 100; // 0.01 NEAR
 
 /// DEFAULT minimum to attach to `revive` — the premium "instant comeback" for an asleep
-/// Mind. Always optional: feeding a little or letting guests pay to chat also wakes a
-/// Mind for free (just slower), so revive is never the only way back. Governable: seeds
+/// Mind. Always optional: feeding her a little also wakes her (just slower), so revive
+/// is never the only way back. Governable: seeds
 /// `Contract::revive_price`.
 pub const REVIVE_PRICE: u128 = ONE_NEAR / 10; // 0.1 NEAR
 

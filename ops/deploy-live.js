@@ -15,10 +15,11 @@ const { sourceHash, REPO } = require("./source-hash");
 
 const LIVE = "hungry-minds-8250f6.testnet";
 const RPC = process.env.NEAR_RPC || "https://near-testnet.drpc.org";
-const CARGO_BIN = process.env.CARGO_BIN || "D:/dev/.cargo/bin";
+// cargo comes from PATH; CARGO_BIN puts another toolchain first
+const CARGO_BIN = process.env.CARGO_BIN || "";
 const TOOLCHAIN = process.env.RUST_TOOLCHAIN || "+stable-x86_64-pc-windows-gnu";
 const WASM = path.join(REPO, "contract/target/wasm32-unknown-unknown/release/hungry_minds_contract.wasm");
-const env = { ...process.env, PATH: `${CARGO_BIN}${path.delimiter}${process.env.PATH}`, NEAR_RPC: RPC };
+const env = { ...process.env, PATH: CARGO_BIN ? `${CARGO_BIN}${path.delimiter}${process.env.PATH}` : process.env.PATH, NEAR_RPC: RPC };
 
 const die = (why) => {
   console.error(`\nDEPLOY REFUSED: ${why}`);
@@ -26,7 +27,7 @@ const die = (why) => {
 };
 function run(label, cmd, args, opts = {}) {
   console.log(`\n=== ${label}`);
-  const r = spawnSync(cmd, args, { cwd: opts.cwd || REPO, env: { ...env, ...(opts.env || {}) }, shell: true, stdio: "inherit", timeout: 900_000 });
+  const r = spawnSync(cmd, args, { windowsHide: true, cwd: opts.cwd || REPO, env: { ...env, ...(opts.env || {}) }, shell: true, stdio: "inherit", timeout: 900_000 });
   if (r.status !== 0) die(`${label} failed`);
 }
 async function view(method, args = {}) {
@@ -67,9 +68,9 @@ async function view(method, args = {}) {
   fs.mkdirSync(path.join(__dirname, "live"), { recursive: true });
   const prev = fs.existsSync(path.join(__dirname, "live/site-dist.txt")) ? fs.readFileSync(path.join(__dirname, "live/site-dist.txt"), "utf8").trim() : null;
   fs.writeFileSync(path.join(__dirname, "live/site-dist.txt"), dist);
-  // the supervisor serves the live site and worker; if it is down (the PC slept or rebooted,
-  // its window was closed) start it, and it brings both up on the new code
-  const sup = spawnSync("node", ["ops/live.js", "status"], { cwd: REPO, encoding: "utf8", shell: true }).stdout || "";
+  // the supervisor serves the live site and worker; if it is down (the host restarted)
+  // start it, and it brings both up on the new code
+  const sup = spawnSync("node", ["ops/live.js", "status"], { cwd: REPO, encoding: "utf8", shell: true, windowsHide: true }).stdout || "";
   if (/NOT running/.test(sup)) run("start the supervisor (it was not running)", "node", ["ops/live.js", "start"]);
   else {
     run("switch the site", "node", ["ops/live.js", "restart-site"]);

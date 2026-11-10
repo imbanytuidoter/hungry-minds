@@ -4,8 +4,9 @@
 //
 //  - live (default): the deployed contract (lib/chain.ts CONTRACT_ID — the public testnet
 //    deploy unless overridden). Reads go over RPC (get_mind, live_balance, live_state,
-//    get_look, services, listings, params…); writes are signed by the connected wallet or a
-//    browser burner account; replies arrive from the worker via last_thought.
+//    get_look, services, listings, params…); writes are signed by the connected wallet (or a
+//    browser burner account in QA builds only); chat replies come from the worker's chat
+//    server (/api/chat), jobs are polled with get_job.
 //  - demo (`/app?demo`, or NEXT_PUBLIC_CONTRACT_ID=""): the colony in lib/game/world.ts,
 //    the same rules on a fast clock, saved in this browser. No network needed.
 //
@@ -19,6 +20,7 @@ import { DEFAULT_PARAMS, LIVE_GHOST_MS, MOOD, demoClock, liveClock, moodAt, stat
 import { lookFromTraits, NATURES, TONES, type Look } from "@/lib/game/look";
 import { mindReply } from "@/lib/game/brain";
 import { CAT_IDS, type Category, type Offer } from "@/lib/game/services";
+import { clipWords, LIMITS } from "@/lib/game/bytes";
 import * as W from "@/lib/game/world";
 import { chatAllowance, sendChat } from "@/lib/chatClient";
 import * as gate from "@/lib/agentClient";
@@ -411,7 +413,7 @@ function useLive(enabled: boolean): Game {
           const reaped = was.state !== "ghost" && is.state === "ghost";
           // Reaping credits the 0.25 NEAR hatch reserve to unclaimed: that is not a visitor.
           if (reaped) fresh.push({ k: "warn", who: r.mind.name, t: "faded into a ghost. Her hatch reserve is yours to claim.", v: is.unclaimed - was.unclaimed, ts: t });
-          else if (is.unclaimed > was.unclaimed + 1e-9) fresh.push({ k: "use", who: "A visitor", t: `paid ${r.mind.name} to talk`, v: is.unclaimed - was.unclaimed, ts: t });
+          else if (is.unclaimed > was.unclaimed + 1e-9) fresh.push({ k: "use", who: "A visitor", t: `paid ${r.mind.name} for a chat or a job`, v: is.unclaimed - was.unclaimed, ts: t });
           if (was.state !== is.state && ["hungry", "starving", "asleep"].includes(is.state))
             fresh.push({ k: "warn", who: r.mind.name, t: is.state === "asleep" ? "fell asleep. Feed or revive her." : `is ${is.state}. Feed her soon.`, v: 0, ts: t });
         }
@@ -528,13 +530,17 @@ function useLive(enabled: boolean): Game {
           balance: bal,
           thoughts: m.thought_count,
           bornTs: Math.floor(m.born_ts / 1e6),
-          asleepSince: state === "asleep" ? Math.floor((m.asleep_since || Date.now() * 1e6) / 1e6) : 0,
+          // the ghost window counts from the sleep recorded on chain; until the worker (or anyone)
+          // settles her idle burn there is none, so "now" only keeps her shown as asleep
+          asleepSince: state === "asleep" ? (m.asleep_since ? Math.floor(m.asleep_since / 1e6) : Date.now()) : 0,
+          sleepPending: state === "asleep" && !m.asleep_since,
           ghost: m.ghost,
           ownerUnclaimed: y2n(m.owner_unclaimed),
           lastMetabolismTs: Date.now(),
           ...moodAt({ happy: f?.happy ?? FRESH.happy, energy: f?.energy ?? FRESH.energy, ts: f?.ts ?? now }, now),
           love: f?.love ?? 0,
-          msgs: f?.msgs ?? (m.last_reply ? [{ who: "mind", t: m.last_reply }] : []),
+          // never seed a chat with her last on-chain reply: it was written for someone else
+          msgs: f?.msgs ?? [],
         };
       }),
     [rows, feel, now]
@@ -747,7 +753,9 @@ function useLive(enabled: boolean): Game {
       const ok = await send(async (s) => {
         // The skill's input schema becomes the order form, when it is small enough to store.
         const schema = skill.inputSchema && Object.keys(skill.inputSchema.properties || {}).length ? JSON.stringify({ type: "object", required: skill.inputSchema.required || [], properties: skill.inputSchema.properties }) : null;
-        out = await chain.publishJobService(s, mindId, skill.name.slice(0, 60), skill.description.slice(0, 280), CAT_IDS.indexOf(cat), price, "job", slaSecs, "text", schema && schema.length <= 1500 ? schema : null);
+        // The contract counts bytes (title ≤ 60, description ≤ 200), so a long skill description
+        // (Token Check's is 211 bytes, many MCP tools are longer) is cut to fit instead of failing.
+        out = await chain.publishJobService(s, mindId, clipWords(skill.name, LIMITS.title), clipWords(skill.description, LIMITS.desc), CAT_IDS.indexOf(cat), price, "job", slaSecs, "text", schema && schema.length <= 1500 ? schema : null);
       });
       const sid = chain.returnedNumber(out);
       // The gateway matches services to skills by name; the explicit map survives renames.

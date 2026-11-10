@@ -1,0 +1,228 @@
+/* Seed: the game in the language of the landing page.
+   Dark velvet, one coloured light, Fraunces for words and Geist Mono for figures, hairlines
+   instead of white cards and shadows, ferns stitched in thread. Five palettes share the form:
+   html[data-palette] = ice (default) | gold | ours | plum | midnight | ice. */
+
+html[data-theme="seed"] .hm {
+  /* palette: gold on green velvet */
+  --v0: #050d09; --v1: #0a1610; --v2: #0f1f17; --v3: #172a20;
+  --v1-rgb: 10, 22, 16;
+  --cream: #ede5d1; --cream2: #b6ae99; --cream3: #8f8a7a;
+  --ink-rgb: 237, 229, 209;
+  --light: #e2ae57; --light-hi: #f3d38c; --light-lo: #a37b3a;
+  --light-rgb: 226, 174, 87;
+  --thread: #b88a42;
+
+  --bg: radial-gradient(120% 90% at 50% 38%, var(--v2) 0%, var(--v1) 52%, var(--v0) 100%);
+  --surface: rgba(var(--ink-rgb), 0.04);
+  --surface-soft: rgba(var(--ink-rgb), 0.06);
+  --ink: var(--cream);
+  --ink-strong: color-mix(in srgb, var(--cream) 85%, #fff);
+  --on-ink: var(--v1);
+  --muted: var(--cream3);
+  --muted-2: var(--cream2);
+  --accent: var(--light);
+  --accent-strong: var(--light-hi);
+  --accent-soft: rgba(var(--light-rgb), 0.14);
+  --on-accent: var(--v1);
+  --line: rgba(var(--ink-rgb), 0.1);
+  --ok: #a9d8a6;
+  --ok-bg: rgba(169, 216, 166, 0.1);
+  --info: #a9c1f0;
+  --dark: rgba(var(--v1-rgb), 0.7);
+  --dark-ink: var(--cream);
+  --dark-muted: var(--cream2);
+  --cta: var(--cream);
+  --cta-shadow: none;
+  --glass: rgba(var(--v1-rgb), 0.55);
+  --glass-line: rgba(var(--ink-rgb), 0.1);
+  --decor: none;
+  --decor-opacity: 1;
+  --font-display: var(--font-fraunces), Georgia, serif;
+  --font-body: var(--font-fraunces), Georgia, serif;
+  --mono-font: var(--font-geist-mono), ui-monospace, Menlo, Consolas, monospace;
+  --ease: cubic-bezier(0.22, 0.8, 0.24, 1);
+  font-variation-settings: "SOFT" 40, "WONK" 0;
+  font-weight: 380;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* palettes */
+html[data-theme="seed"][data-palette="ours"] .hm {
+  --v0: #04120c; --v1: #082017; --v2: #0d2c20; --v3: #15392a; --v1-rgb: 8, 32, 23;
+  --cream: #fbf3e8; --cream2: #d9cfc0; --cream3: #a99f90; --ink-rgb: 251, 243, 232;
+  --light: #ff6fa3; --light-hi: #ffb3cf; --light-lo: #b8436f; --light-rgb: 255, 111, 163; --thread: #8fe6b8;
+}
+html[data-theme="seed"][data-palette="plum"] .hm {
+  --v0: #0c0510; --v1: #170a1d; --v2: #22102a; --v3: #2e1838; --v1-rgb: 23, 10, 29;
+  --cream: #f1e8f0; --cream2: #c8b9c9; --cream3: #9a8a9c; --ink-rgb: 241, 232, 240;
+  --light: #7fe0ae; --light-hi: #b9f3d3; --light-lo: #3f9b6e; --light-rgb: 127, 224, 174; --thread: #6fc79a;
+}
+html[data-theme="seed"][data-palette="midnight"] .hm {
+  --v0: #03060f; --v1: #070d1c; --v2: #0c1529; --v3: #142038; --v1-rgb: 7, 13, 28;
+  --cream: #eef0f6; --cream2: #b9bfd0; --cream3: #8a91a6; --ink-rgb: 238, 240, 246;
+  --light: #ff7a5c; --light-hi: #ffb29f; --light-lo: #b9472f; --light-rgb: 255, 122, 92; --thread: #c2533a;
+}
+html[data-theme="seed"][data-palette="ice"] .hm {
+  --v0: #030a0c; --v1: #071417; --v2: #0c1e22; --v3: #13292e; --v1-rgb: 7, 20, 23;
+  --cream: #e8f4f6; --cream2: #b3c8cc; --cream3: #85999d; --ink-rgb: 232, 244, 246;
+  --light: #8fd3ff; --light-hi: #c6e9ff; --light-lo: #3f86b5; --light-rgb: 143, 211, 255; --thread: #4a8fbd;
+}
+
+/* type: figures and small labels in mono, headings in the display cut */
+html[data-theme="seed"] .hm .mono,
+html[data-theme="seed"] .hm .num { font-family: var(--mono-font); font-variant-numeric: tabular-nums; }
+html[data-theme="seed"] .hm .serif,
+html[data-theme="seed"] .hm .panel-title,
+html[data-theme="seed"] .hm h1,
+html[data-theme="seed"] .hm h2 { font-family: var(--font-display); font-weight: 400; letter-spacing: -0.01em; }
+html[data-theme="seed"] .hm .sub { color: var(--muted); }
+html[data-theme="seed"] .hm a:hover { color: var(--accent-strong); }
+html[data-theme="seed"] .hm button:focus-visible,
+html[data-theme="seed"] .hm input:focus-visible,
+html[data-theme="seed"] .hm select:focus-visible,
+html[data-theme="seed"] .hm textarea:focus-visible { outline-color: var(--light-hi); }
+
+/* surfaces: velvet panels with a hairline, no white cards, no soft shadows */
+html[data-theme="seed"] .hm .glass { background: var(--glass); border: 1px solid var(--line); border-radius: 16px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+html[data-theme="seed"] .hm .card { background: rgba(var(--ink-rgb), 0.03); border: 1px solid var(--line); border-radius: 12px; }
+html[data-theme="seed"] .hm .lift:hover { transform: translateY(-2px); box-shadow: inset 0 0 0 1px rgba(var(--light-rgb), 0.35); }
+
+/* buttons: one cream main action, everything else outlined */
+html[data-theme="seed"] .hm .btn-cta { background: var(--cream); color: var(--v1); border-radius: 12px; box-shadow: none; font-weight: 480; font-size: 16px; padding: 12px 20px; transition: background-color 0.25s var(--ease), transform 0.15s var(--ease); }
+html[data-theme="seed"] .hm .btn-cta:hover { background: color-mix(in srgb, var(--cream) 80%, #fff); }
+html[data-theme="seed"] .hm .btn-cta:disabled { background: rgba(var(--ink-rgb), 0.12); color: var(--muted); }
+html[data-theme="seed"] .hm .btn-ink,
+html[data-theme="seed"] .hm .btn-ghost,
+html[data-theme="seed"] .hm .btn-line { background: transparent; color: var(--cream); border: none; box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), 0.22); border-radius: 10px; font-weight: 450; transition: background-color 0.25s var(--ease), box-shadow 0.25s var(--ease); }
+html[data-theme="seed"] .hm .btn-ink:hover,
+html[data-theme="seed"] .hm .btn-ghost:hover,
+html[data-theme="seed"] .hm .btn-line:hover { background: rgba(var(--ink-rgb), 0.06); box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), 0.34); }
+html[data-theme="seed"] .hm .btn-ink:disabled { color: var(--muted); background: transparent; }
+html[data-theme="seed"] .hm .btn-link { color: var(--light-hi); font-weight: 450; text-decoration: none; border-bottom: 1px solid rgba(var(--light-rgb), 0.35); }
+
+/* chips, fields, bars */
+html[data-theme="seed"] .hm .chip { background: transparent; border: 1px solid var(--line); border-radius: 8px; color: var(--cream2); font-weight: 450; }
+html[data-theme="seed"] .hm .chip[aria-pressed="true"] { background: rgba(var(--light-rgb), 0.14); border-color: rgba(var(--light-rgb), 0.6); color: var(--light-hi); }
+html[data-theme="seed"] .hm .field,
+html[data-theme="seed"] .hm .field.pill { background: rgba(var(--ink-rgb), 0.04); border: 1px solid var(--line); border-radius: 10px; color: var(--cream); }
+html[data-theme="seed"] .hm .field::placeholder { color: var(--muted); }
+html[data-theme="seed"] .hm select.field option { background: var(--v1); color: var(--cream); }
+html[data-theme="seed"] .hm .bar { background: rgba(var(--ink-rgb), 0.1); height: 4px; border-radius: 2px; }
+html[data-theme="seed"] .hm .bar > span { background: var(--light) !important; border-radius: 2px; }
+
+/* the left navigation */
+html[data-theme="seed"] .hm-nav button { border-radius: 10px; }
+html[data-theme="seed"] .hm-nav button[aria-current="page"] { background: rgba(var(--ink-rgb), 0.06); border-color: var(--line); box-shadow: none; }
+html[data-theme="seed"] .hm-nav button svg { stroke: var(--cream); }
+
+/* the dome becomes a lit velvet niche: no sky, no clouds, no sun, one pool of light */
+html[data-theme="seed"] .hm-dome { background: radial-gradient(70% 60% at 50% 62%, rgba(var(--light-rgb), 0.16), rgba(var(--light-rgb), 0.04) 45%, transparent 70%), radial-gradient(120% 100% at 50% 30%, var(--v2), var(--v0) 100%); border: 1px solid var(--line); box-shadow: inset 0 0 0 1px rgba(var(--ink-rgb), 0.03); }
+html[data-theme="seed"] .hm-dome .hm-cloud,
+html[data-theme="seed"] .hm-dome .hm-weather,
+html[data-theme="seed"] .hm-dome .hm-sparkle,
+html[data-theme="seed"] .hm-dome .hm-glare,
+html[data-theme="seed"] .hm-dome .hm-dome-plants { display: none; }
+html[data-theme="seed"] .hm-stage { background: radial-gradient(ellipse at 50% 40%, rgba(var(--light-rgb), 0.35), rgba(var(--light-rgb), 0.06) 60%, transparent 72%) !important; box-shadow: none !important; }
+
+/* the round tiles a Mind sits on: a dark well with a hairline instead of a pastel square */
+html[data-theme="seed"] .hm .hm-tile { background: radial-gradient(circle at 50% 35%, var(--v3), var(--v1) 78%) !important; box-shadow: inset 0 0 0 1px var(--line); }
+
+/* inline white borders and white fills written in components follow the hairline here */
+html[data-theme="seed"] .hm [style*="solid #fff"],
+html[data-theme="seed"] .hm [style*="solid rgb(255, 255, 255)"],
+html[data-theme="seed"] .hm [style*="solid #FFFFFF"] { border-color: var(--line) !important; }
+
+/* the old glossy plants and rocks give way to the stitched ferns of the seed scene */
+html[data-theme="seed"] .hm-decor { display: none; }
+
+/* backdrop scene: velvet pile, a light pool, ferns stitched in thread */
+html[data-theme="seed"] .scene-seed { display: block; }
+.seed-velvet { position: absolute; inset: 0; opacity: 0.3; background-size: 600px 600px; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='600' height='600'><filter id='m' x='0' y='0' width='100%' height='100%'><feTurbulence stitchTiles='stitch' type='fractalNoise' baseFrequency='.006 .012' numOctaves='3' seed='7'/><feColorMatrix values='0 0 0 0 .1  0 0 0 0 .1  0 0 0 0 .1  0 0 0 .9 0'/></filter><rect width='600' height='600' filter='url(%23m)'/></svg>"); }
+.seed-pile { position: absolute; inset: 0; opacity: 0.18; background-size: 220px 220px; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n' x='0' y='0' width='100%' height='100%'><feTurbulence stitchTiles='stitch' type='fractalNoise' baseFrequency='.9 .55' numOctaves='2' seed='3'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .5 0'/></filter><rect width='220' height='220' filter='url(%23n)'/></svg>"); mix-blend-mode: overlay; }
+.seed-pool { position: absolute; left: 50%; top: 46%; width: 90vmax; height: 90vmax; transform: translate(-50%, -50%); background: radial-gradient(closest-side, rgba(var(--light-rgb), 0.12), rgba(var(--light-rgb), 0.04) 40%, transparent 70%); }
+.seed-ferns { position: absolute; bottom: -2vh; width: clamp(180px, 22vw, 360px); height: auto; opacity: 0.55; }
+.seed-ferns-l { left: -2vw; }
+.seed-ferns-r { right: -2vw; transform: scaleX(-1); }
+.seed-ferns path { fill: none; stroke: var(--thread); stroke-linecap: round; }
+.seed-ferns .stem { stroke-width: 1.2; stroke-dasharray: 3.2 2.2; }
+.seed-ferns .leaf { stroke-width: 0.9; stroke-dasharray: 2.4 1.8; }
+.seed-ferns .knot { fill: var(--light); stroke: none; }
+@media (max-width: 600px) { .seed-ferns { width: 42vw; opacity: 0.4; } }
+
+/* pieces that paint their own light colours inline */
+html[data-theme="seed"] .hm .hm-logo-word { color: var(--cream) !important; font-family: var(--font-fraunces), Georgia, serif !important; font-weight: 500 !important; letter-spacing: -0.01em !important; }
+html[data-theme="seed"] .hm .hm-veil { background: rgba(var(--v1-rgb), 0.55) !important; }
+html[data-theme="seed"] .hm .hm-band { background: radial-gradient(120% 140% at 0% 50%, rgba(var(--light-rgb), 0.16), transparent 60%), rgba(var(--ink-rgb), 0.03) !important; border: 1px solid var(--line); border-radius: 14px !important; }
+html[data-theme="seed"] .hm .hm-wx-pic { background: radial-gradient(80% 90% at 50% 70%, rgba(var(--light-rgb), 0.3), transparent 70%), var(--v1) !important; border-color: var(--line) !important; }
+html[data-theme="seed"] .hm .hm-wx-pic > div { display: none; }
+
+/* category marks: thread-drawn icons in a hairline ring instead of glossy coloured balls */
+html[data-theme="seed"] .hm .hm-bob { animation: none !important; }
+html[data-theme="seed"] .hm .hm-bob > div:first-child,
+html[data-theme="seed"] .hm .hm-bob > div:nth-child(3) { display: none; }
+html[data-theme="seed"] .hm .hm-bob > div:nth-child(2) { background: rgba(var(--light-rgb), 0.08) !important; box-shadow: inset 0 0 0 1px rgba(var(--light-rgb), 0.45) !important; border-radius: 50% !important; }
+html[data-theme="seed"] .hm .hm-bob svg { stroke: var(--light-hi) !important; filter: none !important; }
+html[data-theme="seed"] .hm .hm-cat-ic { background: rgba(var(--light-rgb), 0.08) !important; box-shadow: inset 0 0 0 1px rgba(var(--light-rgb), 0.4); }
+html[data-theme="seed"] .hm .hm-cat-ic svg { stroke: var(--light-hi); }
+
+/* light mode (html[data-mode="light"], the same toggle as the landing): the velvet becomes warm
+   paper, cream ink becomes the velvet colour, the light goes a shade deeper to read on paper */
+html[data-theme="seed"] .hm { --tg-moon: var(--light); --tg-sun: #f2a93b; --tg-cream: #fbf3e8; }
+html[data-mode="light"][data-theme="seed"] .hm {
+  color-scheme: light;
+  --v0: #e6dcc8; --v1: #f3ecdf; --v2: #fbf7ee; --v3: #e9e0cf; --v1-rgb: 243, 236, 223;
+  --cream: #14231a; --cream2: #44503f; --cream3: #6f7566; --ink-rgb: 20, 35, 26;
+  --light: #b07a22; --light-hi: #8a5d14; --light-lo: #c99a4e; --light-rgb: 176, 122, 34; --thread: #a37b3a;
+  --ink-strong: color-mix(in srgb, var(--cream) 85%, #000);
+  --line: rgba(var(--ink-rgb), 0.12);
+  --glass: rgba(var(--v2-rgb, 251, 247, 238), 0.7);
+  --ok: #2f7d4a; --ok-bg: rgba(47, 125, 74, 0.1); --info: #2d5fb3;
+  --tg-moon: #e2ae57; --tg-ink: var(--cream); --tg-track-light: var(--v0); --tg-knob-light: var(--v2);
+}
+html[data-mode="light"][data-theme="seed"][data-palette="ours"] .hm {
+  --v0: #eadfce; --v1: #f6efe3; --v2: #fffaf2; --v3: #ece2d2; --v1-rgb: 246, 239, 227; --v2-rgb: 255, 250, 242;
+  --cream: #0d2c20; --cream2: #3d584a; --cream3: #6a7d71; --ink-rgb: 13, 44, 32;
+  --light: #d23f78; --light-hi: #a82a5c; --light-lo: #e57fa6; --light-rgb: 210, 63, 120; --thread: #3fb97c;
+  --tg-moon: #ff6fa3;
+}
+html[data-mode="light"][data-theme="seed"][data-palette="plum"] .hm {
+  --v0: #ece0ea; --v1: #f7eff5; --v2: #fffaff; --v3: #eee3ec; --v1-rgb: 247, 239, 245; --v2-rgb: 255, 250, 255;
+  --cream: #241030; --cream2: #574463; --cream3: #7f6d88; --ink-rgb: 36, 16, 48;
+  --light: #1f9a62; --light-hi: #157a4c; --light-lo: #5cc493; --light-rgb: 31, 154, 98; --thread: #3f9b6e;
+  --tg-moon: #7fe0ae;
+}
+html[data-mode="light"][data-theme="seed"][data-palette="midnight"] .hm {
+  --v0: #e2e6f0; --v1: #f1f3f8; --v2: #fbfcff; --v3: #e6e9f2; --v1-rgb: 241, 243, 248; --v2-rgb: 251, 252, 255;
+  --cream: #0d1630; --cream2: #424b66; --cream3: #6c7489; --ink-rgb: 13, 22, 48;
+  --light: #d9502f; --light-hi: #b13d20; --light-lo: #f08a70; --light-rgb: 217, 80, 47; --thread: #c2533a;
+  --tg-moon: #ff7a5c;
+}
+html[data-mode="light"][data-theme="seed"][data-palette="ice"] .hm {
+  --v0: #dde9ec; --v1: #eef6f7; --v2: #fafeff; --v3: #e2edf0; --v1-rgb: 238, 246, 247; --v2-rgb: 250, 254, 255;
+  --cream: #0b2328; --cream2: #3d5a60; --cream3: #56707a; --ink-rgb: 11, 35, 40;
+  --light: #2a7fb8; --light-hi: #1d6597; --light-lo: #74b9e6; --light-rgb: 42, 127, 184; --thread: #4a8fbd;
+  --tg-moon: #8fd3ff;
+}
+html[data-mode="light"][data-theme="seed"] .hm .btn-cta:hover { background: color-mix(in srgb, var(--cream) 86%, #000); }
+html[data-mode="light"][data-theme="seed"] .seed-velvet { opacity: 0.08; }
+html[data-mode="light"][data-theme="seed"] .seed-pile { opacity: 0.1; mix-blend-mode: multiply; }
+html[data-mode="light"][data-theme="seed"] .seed-ferns { opacity: 0.7; }
+html[data-mode="light"] { color-scheme: light; }
+html.hm-mode-anim, html.hm-mode-anim body, html.hm-mode-anim *:not(hm-mode-toggle) {
+  transition: background-color 0.45s cubic-bezier(0.22, 0.8, 0.24, 1), color 0.45s cubic-bezier(0.22, 0.8, 0.24, 1), border-color 0.45s cubic-bezier(0.22, 0.8, 0.24, 1), fill 0.45s, stroke 0.45s !important;
+}
+/* the toggle only belongs to the seed look; the older themes keep their own colours */
+hm-mode-toggle.hm-mode-slot { display: none; --tg-h: 30px; flex: none; }
+html[data-theme="seed"] hm-mode-toggle.hm-mode-slot { display: inline-block; }
+
+/* the lit edge of the mode toggle on the main action: a bright bottom line and a soft glow below */
+html[data-theme="seed"] .hm .btn-cta { box-shadow: inset 0 -2px 0 rgba(var(--light-rgb), 0.9), 0 10px 26px -10px rgba(var(--light-rgb), 0.8), 0 0 0 1px rgba(var(--light-rgb), 0.2); transition: background-color 0.25s var(--ease), box-shadow 0.3s var(--ease), transform 0.15s var(--ease); }
+html[data-theme="seed"] .hm .btn-cta:hover { box-shadow: inset 0 -2px 0 rgba(var(--light-rgb), 1), 0 14px 34px -8px rgba(var(--light-rgb), 0.95), 0 0 0 1px rgba(var(--light-rgb), 0.38); }
+html[data-theme="seed"] .hm .btn-cta:disabled { box-shadow: none; }
+/* a selected category chip is light: its icon takes the dark ink so it does not vanish */
+html[data-theme="seed"] .hm button[aria-pressed="true"] .hm-cat-ic { background: var(--v1) !important; box-shadow: none; }
+html[data-theme="seed"] .hm button[aria-pressed="true"] .hm-cat-ic svg { stroke: var(--light-hi); }
+/* the badge on dark velvet: a lit ring and a soft glow in the palette light, so it never sinks */
+html[data-theme="seed"] .hm .hm-logo-img { filter: none !important; box-shadow: 0 0 0 1.5px rgba(var(--light-rgb), 0.6), 0 0 20px -4px rgba(var(--light-rgb), 0.55), 0 4px 12px rgba(0, 0, 0, 0.35); }
+html[data-mode="light"][data-theme="seed"] .hm .hm-logo-img { box-shadow: 0 0 0 1.5px rgba(var(--light-rgb), 0.5), 0 4px 12px rgba(11, 35, 40, 0.18); }

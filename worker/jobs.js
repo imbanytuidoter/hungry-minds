@@ -91,4 +91,47 @@ function makeJobRunner({ account, view, contractId, answer }) {
   return { tick };
 }
 
-module.exports = { makeJobRunner };
+// A Mind that starves on idle burn alone only falls asleep ON CHAIN when something settles her
+// metabolism, and the ghost window counts from that moment (state.rs is_reapable). Nobody does
+// that for a Mind nobody touches, so her countdown never started and she could never be reaped.
+// The worker records it: `settle` is permissionless and only applies drain she already owes.
+// A Mind is sent only when the live view says she is asleep while the chain does not, AND idle
+// drain is pending (live balance below the stored one): then settle is sure to record the sleep
+// (contract.rs settle_metabolism), so no gas goes on no-op calls. Once a minute; one try per
+// Mind per 10 minutes. Runs on its own (not under JOBS=off); SLEEP=off turns it off.
+const SLEEP_SCAN_MS = 60_000;
+const SLEEP_RETRY_MS = 10 * 60_000;
+
+function makeSleepRecorder({ account, view, contractId, now = () => Date.now(), log = console }) {
+  const tried = new Map(); // mind id -> last attempt (ms)
+  let lastScan = -Infinity;
+
+  async function tick() {
+    if (now() - lastScan < SLEEP_SCAN_MS) return [];
+    lastScan = now();
+    const sent = [];
+    let total = Infinity;
+    for (let from = 0; from < total; from += 60) {
+      const snap = await view("colony_snapshot", { from_index: from, limit: 60 });
+      if (!snap || !Array.isArray(snap.minds) || !snap.minds.length) break;
+      total = Number(snap.total_minds) || 0;
+      for (const row of snap.minds) {
+        const m = row.mind;
+        if (m.ghost || row.live_state !== "asleep" || Number(m.asleep_since) !== 0) continue;
+        if (!(BigInt(row.live_balance) < BigInt(m.balance))) continue; // no idle drain pending: settle would change nothing
+        if (now() - (tried.get(row.id) ?? -Infinity) < SLEEP_RETRY_MS) continue;
+        tried.set(row.id, now());
+        sent.push(row.id);
+        account
+          .functionCall({ contractId, methodName: "settle", args: { id: row.id }, gas: "30000000000000", attachedDeposit: "0" })
+          .then(() => log.log(`mind ${row.id} starved on idle burn: sleep recorded on chain, ghost window started`))
+          .catch((e) => log.error(`settle ${row.id} failed:`, e.message));
+      }
+    }
+    return sent;
+  }
+
+  return { tick };
+}
+
+module.exports = { makeJobRunner, makeSleepRecorder };

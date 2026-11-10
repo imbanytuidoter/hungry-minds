@@ -1,4 +1,4 @@
-// Visit every tab in every language; report console errors and junk text on screen.
+// Visit every tab; report console errors and junk text on screen.
 module.exports = async (b, [site, width = "1440"]) => {
   const out = [];
   const junk = /\bundefined\b|\bNaN\b|\[object Object\]|Infinity|\{\{|\}\}/;
@@ -15,7 +15,7 @@ module.exports = async (b, [site, width = "1440"]) => {
   await b.sleep(500);
   if (!(await b.js(`!!document.querySelector("nav.hm-nav")`))) { await b.click("Shop"); await b.sleep(1200); }
   const langs = await b.js(`[...document.querySelectorAll('select[aria-label="Language"] option')].map(o => o.value)`);
-  for (const lang of langs || ["en"]) {
+  for (const lang of langs && langs.length ? langs : ["en"]) {
     await b.js(`(() => { const s = document.querySelector('select[aria-label="Language"]'); if (!s) return; Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, ${JSON.stringify(lang)}); s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     await b.sleep(500);
     const seen = [];
@@ -33,6 +33,6 @@ module.exports = async (b, [site, width = "1440"]) => {
   }
   // leave the shared browser profile in English for the next suite
   await b.js(`localStorage.removeItem("hm-lang"); "x"`);
-  await b.shot(process.env.SHOT || "sweep.png");
+  await b.shot(process.env.SHOT || require("path").join(process.env.SHOT_DIR || require("os").tmpdir(), "sweep.png"));
   return out;
 };

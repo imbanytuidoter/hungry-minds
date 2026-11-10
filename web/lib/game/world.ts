@@ -168,7 +168,7 @@ function spend(w: World, amount: number): World {
 
 // ── Actions (each mirrors a contract method) ───────────────────────────────────
 
-/** hatch_mind(name) — 2 NEAR: 1.0 food / 0.25 reserve / 0.75 treasury. */
+/** hatch_mind(name) — 1 NEAR: 0.1 food / 0.25 reserve / 0.65 treasury. */
 export function hatch(w: World, name: string, look: Look, natures: string[], now: number): { w: World; id: number } {
   const n = name.trim();
   must(n.length >= 1 && n.length <= 32, "name must be 1-32 characters");
@@ -226,7 +226,7 @@ export function think(w: World, id: number, prompt: string, now: number): World 
   let x = settleOne(w, id, now);
   const m = get(x, id);
   must(m.owner === x.account, "only the owner can use think()");
-  must(!m.ghost, "this Mind is a ghost — revive it first");
+  must(!m.ghost, "this Mind is a ghost: a ghost can't think");
   must(m.asleepSince === 0 && m.balance >= P.thoughtCost, "this Mind is asleep — feed it");
   x = withMind(x, id, (m) => {
     const balance = round(m.balance - P.thoughtCost);
@@ -249,7 +249,7 @@ export function chat(w: World, id: number, prompt: string, paid: number, now: nu
   const m = get(x, id);
   must(payer !== m.owner, "use think() for your own Mind");
   must(!m.ghost, "this Mind is a ghost");
-  must(m.asleepSince === 0, "this Mind is asleep — only the owner can feed it");
+  must(m.asleepSince === 0, "this Mind is asleep: feed her to wake her (anyone can)");
   if (payer === x.account) x = spend(x, paid);
   const s = guestSplit(paid);
   x = withMind(x, id, (m) => {
@@ -267,7 +267,7 @@ export function chat(w: World, id: number, prompt: string, paid: number, now: nu
   return payer === x.account ? log(x, `Chat with ${m.name}`, -paid, now) : x;
 }
 
-/** The Mind's reply lands (worker -> respond -> on_thought in live mode). */
+/** The Mind's reply lands. */
 export function deliverReply(w: World, id: number, n: number, service?: string, text?: string): World {
   return withMind(w, id, (m) => ({ ...m, msgs: [...m.msgs, { who: "mind", t: text ?? demoReply(m.natures, stateOf(m), n, service) }] }));
 }

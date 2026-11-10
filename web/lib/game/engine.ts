@@ -4,8 +4,8 @@
 // so the demo world plays by exactly the rules the chain enforces: same prices, same
 // splits, same hunger thresholds, same metabolism. The only thing the demo changes is
 // the clock — see DEMO_* below — so a judge can watch a Mind get hungry in minutes
-// instead of weeks. Happiness and energy are off-chain game feel (the handoff's
-// FUNCTIONS_AND_BLOCKCHAIN.md §7 says not to write them to chain), and live here too.
+// instead of weeks. Happiness and energy are off-chain game feel by design,
+// and live here too.
 
 import type { Look, Mood } from "./look";
 
@@ -31,6 +31,15 @@ export const DEFAULT_PARAMS: Params = {
 export const MINT_SPLIT = { food: 0.1, reserve: 0.25, treasury: 0.65 };
 
 export const feedSplit = (paid: number) => ({ mind: paid * 0.95, treasury: paid * 0.05 });
+/** Her food bar: 100% is the food one Dream swirl gives (0.05 NEAR, 95% of it food). Same as
+ *  state.rs FOOD_BAR_FULL; a newborn's 0.1 NEAR is a full bar with food to spare. */
+export const FOOD_BAR_FULL = 0.0475;
+export const foodBarPct = (food: number) => Math.min(100, Math.round((food / FOOD_BAR_FULL) * 100));
+/** What feeding `paid` NEAR gives her: food-bar points and how many replies that food pays for. */
+export const feedGain = (paid: number, thoughtCost = DEFAULT_PARAMS.thoughtCost) => {
+  const food = feedSplit(paid).mind;
+  return { food, pct: Math.round((food / FOOD_BAR_FULL) * 100), replies: Math.floor(food / thoughtCost + 1e-9) };
+};
 // What others pay to use a Mind: 90% to her owner, 10% protocol. Nothing goes into her food.
 export const guestSplit = (paid: number) => ({ mind: 0, owner: paid * 0.9, treasury: paid * 0.1 });
 export const reviveSplit = (paid: number) => ({ mind: paid * 0.8, treasury: paid * 0.2 });
@@ -40,7 +49,7 @@ export const reviveSplit = (paid: number) => ({ mind: paid * 0.8, treasury: paid
 const DAY_MS = 86_400_000;
 
 /** Real chain: 10 thoughts/day -> one quiet thought every 2.4 h. The demo world runs one
- *  every 6 s, so a fresh Mind (1 NEAR) sleeps after ~50 minutes of neglect. */
+ *  every 6 s, so a newborn (0.1 NEAR of food) sleeps after ~5 minutes of neglect. */
 export const DEMO_IDLE_MS = 6_000;
 /** Real chain: 30 days asleep -> ghost. The demo uses the contract's own `demo-window`
  *  build value (state.rs: 3 minutes). */
@@ -72,6 +81,9 @@ export type MindRec = {
   thoughts: number;
   bornTs: number;
   asleepSince: number; // 0 = awake
+  /** asleep by her live food, but the chain has not recorded it yet (nothing settled her idle
+   *  burn), so the ghost window has not started: no countdown, no Reap */
+  sleepPending?: boolean;
   ghost: boolean;
   ownerUnclaimed: number; // owner's 90% of what others paid + reap rebate
   lastMetabolismTs: number;
@@ -89,9 +101,12 @@ export function stateOf(m: Pick<MindRec, "balance" | "asleepSince" | "ghost">): 
   if (m.ghost) return "ghost";
   if (m.asleepSince !== 0) return "asleep";
   const b = m.balance;
-  if (b >= 0.08) return "full";
-  if (b >= 0.03) return "content";
-  if (b >= 0.01) return "hungry";
+  // 80% / 30% / 10% of the food bar (0.038 / 0.01425 / 0.00475 NEAR), as state.rs; the tiny
+  // epsilon keeps exact thresholds from slipping a step on floating-point balances
+  const e = 1e-12;
+  if (b + e >= FOOD_BAR_FULL * 0.8) return "full";
+  if (b + e >= FOOD_BAR_FULL * 0.3) return "content";
+  if (b + e >= FOOD_BAR_FULL * 0.1) return "hungry";
   if (b > 0) return "starving";
   return "asleep";
 }
@@ -170,7 +185,7 @@ export function moodCap(s: HungerState): { happy: number; energy: number } {
 
 /** Off-chain mood drift, applied on every tick. */
 export function drift(m: MindRec, dtMs: number): MindRec {
-  const k = dtMs / 4000; // the prototype's 4 s tick
+  const k = dtMs / 4000; // a 4 s reference tick
   return { ...m, happy: Math.max(10, m.happy - 0.2 * k), energy: Math.max(10, m.energy - 0.3 * k) };
 }
 

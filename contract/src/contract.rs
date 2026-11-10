@@ -2,9 +2,7 @@
 //!
 //! State is deliberately tiny per Mind: traits + a few ints + short name.
 //! Everything derived (hunger state, mood, the SVG) is computed from these in
-//! views, and all money math goes through the pure `economy` module. Methods
-//! are built up via TDD. Full NEP-171 token registry is layered on later; the
-//! Mind lifecycle (the product's value) comes first.
+//! views, and all money math goes through the pure `economy` module.
 
 use crate::art::Appearance;
 use crate::state::{hunger_state, HungerState};
@@ -129,7 +127,8 @@ pub struct Mind {
     pub asleep_since: u64,
     pub thought_count: u64,
     pub ghost: bool,
-    /// Owner's unclaimed 20% guest-chat cut (the only money the owner may take).
+    /// What the owner may claim: their 90% of guest chats, services and jobs, plus the hatch
+    /// reserve rebate once the Mind is a ghost. Never the Mind's food.
     pub owner_unclaimed: NearToken,
     /// The Mind's most recent delivered thought (empty until it has thought once).
     pub last_reply: String,
@@ -182,7 +181,7 @@ impl Mind {
 }
 
 /// A thought in flight: the contract parked a yielded promise and is waiting for the
-/// off-chain worker (OutLayer TEE -> NEAR AI) to resume it with a signed reply.
+/// off-chain worker (worker/index.js -> NEAR AI Cloud) to resume it with a reply.
 #[near(serializers = [borsh])]
 pub struct Pending {
     pub mind_id: u64,
@@ -198,8 +197,8 @@ pub struct Pending {
     pub escrow: u128,
     /// The service this thought was ordered through, if any (its stats update on delivery).
     pub service_id: Option<u64>,
-    /// Who kept the Mind when the guest paid: the 20% keeper cut is theirs even if the Mind
-    /// changes hands before the reply lands.
+    /// Who kept the Mind when the guest paid (a record only: the 90% goes to whoever owns her
+    /// when the reply lands).
     pub keeper: Option<AccountId>,
 }
 
@@ -245,8 +244,8 @@ pub struct Contract {
     /// Governable economy prices (yoctoNEAR), seeded from `economy::*` defaults. Only the
     /// contract account itself (`predecessor == current_account_id`) may retune them via the
     /// `set_*` methods — the key that controls the contract account is the admin, so there is
-    /// no separate owner field to initialize. Flag #1: `thought_cost` must track real
-    /// inference price, so it lives here, not frozen in code.
+    /// no separate owner field to initialize. `thought_cost` must track the real inference
+    /// price, so it lives here, not frozen in code.
     thought_cost: u128,
     guest_min_price: u128,
     revive_price: u128,
@@ -274,12 +273,12 @@ impl Default for Contract {
 }
 
 // Internal, promise-free helpers (unit-tested directly; the public methods below
-// orchestrate these and the OutLayer dispatch).
+// orchestrate these and the yield/resume to the worker).
 impl Contract {
     /// Credit a delivered guest payment: 90% to the owner (unclaimed), 10% to the treasury.
     /// Nothing goes into the Mind's food; her owner feeds her. Called from escrow once the
     /// reply has landed, never at chat time.
-    fn credit_guest_payment(&mut self, id: u64, deposit: u128, _now: u64, keeper: Option<&AccountId>) {
+    fn credit_guest_payment(&mut self, id: u64, deposit: u128, _now: u64, _keeper: Option<&AccountId>) {
         let split = economy::guest_split(deposit);
         self.treasury = self
             .treasury
@@ -287,21 +286,12 @@ impl Contract {
         let Some(mind) = self.minds.get_mut(&id) else {
             return;
         };
-        match keeper {
-            // The Mind was sold or transferred while this guest thought was in flight: the
-            // cut belongs to whoever kept her when the guest paid (hand_over already settled
-            // their unclaimed balance, so pay it to them directly).
-            Some(k) if *k != mind.owner => {
-                if split.to_owner > 0 {
-                    let _ = Promise::new(k.clone()).transfer(NearToken::from_yoctonear(split.to_owner));
-                }
-            }
-            _ => {
-                mind.owner_unclaimed = mind
-                    .owner_unclaimed
-                    .saturating_add(NearToken::from_yoctonear(split.to_owner));
-            }
-        }
+        // The owner's 90% always goes to whoever owns her when the work is delivered. A seller
+        // keeps only the sale price (and what was already credited before the sale, paid out to
+        // them by hand_over); nothing earned after the sale reaches them.
+        mind.owner_unclaimed = mind
+            .owner_unclaimed
+            .saturating_add(NearToken::from_yoctonear(split.to_owner));
     }
 
     /// Resolve a parked thought by request id: store or refund it (finalize_thought), then
@@ -350,7 +340,8 @@ impl Contract {
             media: Some(media),
             media_hash: None,
             copies: Some(1),
-            issued_at: Some(mind.born_ts.to_string()),
+            // NEP-177 wants epoch milliseconds; born_ts is the block timestamp in nanoseconds
+            issued_at: Some((mind.born_ts / 1_000_000).to_string()),
             expires_at: None,
             starts_at: None,
             updated_at: None,
@@ -392,7 +383,7 @@ impl Contract {
         }
     }
 
-    /// Take and zero the owner's accrued 20% cut. NEVER touches the Mind's balance.
+    /// Take and zero the owner's accrued earnings (`owner_unclaimed`). NEVER touches the Mind's balance.
     fn take_owner_earnings(&mut self, id: u64) -> NearToken {
         let mind = self.minds.get_mut(&id).unwrap_or_else(|| env::panic_str("no such Mind"));
         let amount = mind.owner_unclaimed;
@@ -401,7 +392,7 @@ impl Contract {
     }
 
     /// Park a yielded promise for a thought and store the request so the off-chain worker
-    /// (OutLayer TEE -> NEAR AI) can pick it up and resume it with a reply. Returns the
+    /// (worker/index.js -> NEAR AI Cloud) can pick it up and resume it with a reply. Returns the
     /// yielded promise (the caller's transaction pauses here until a reply or the 200-block
     /// timeout). The thought's cost has already been spent by the caller.
     /// `escrow` = (payer, deposit, service) for a guest thought; None for the owner's own.
@@ -506,8 +497,12 @@ impl Contract {
         // returned so the caller can refund their storage (final transfer) or restore them
         // (reverted transfer_call).
         // A Mind that changes hands is no longer for sale. Her agent, like her services and
-        // reputation, goes with her: the buyer earns from it (or plugs in another).
+        // reputation, goes with her when it runs on the platform (an approved responder: the
+        // official / by-URL agent gateway). An agent on the seller's own account is unplugged:
+        // otherwise that account would keep delivering her jobs and earning from her food after
+        // the sale. The buyer plugs in their own.
         self.clear_listing(id);
+        agents::unplug_personal_agent(id, |a| a == &env::current_account_id() || responders().contains(a));
         let cleared = {
             let mind = self.minds.get_mut(&id).unwrap();
             mind.owner = receiver_id.clone();
@@ -761,10 +756,9 @@ impl Contract {
 
     /// Instant paid comeback for an *asleep* Mind: attach >= `revive_price`; the split sends
     /// the premium share to treasury and the rest into the Mind's locked food, waking it at
-    /// once. This is never the only way back — `feed`ing a little, or letting guests `chat`,
-    /// also wakes a Mind for free (just slower) — so revive is a convenience, not a ransom.
-    /// A ghost (reaped after the long sleep) is a permanent memorial and is NOT revived here;
-    /// whether ghosts should ever return is a deliberate open design question, left out of code.
+    /// once. This is never the only way back: `feed`ing her a little also wakes her (just
+    /// slower), so revive is a convenience, not a ransom.
+    /// A ghost (reaped after the long sleep) is a permanent memorial and is NOT revived here.
     #[payable]
     pub fn revive(&mut self, id: u64) {
         let deposit = env::attached_deposit().as_yoctonear();
@@ -801,7 +795,7 @@ impl Contract {
         {
             let mind = self.minds.get_mut(&id).unwrap_or_else(|| env::panic_str("no such Mind"));
             require!((caller) == (mind.owner), "only the owner can use think()");
-            require!(!mind.ghost, "this Mind is a ghost — revive it first");
+            require!(!mind.ghost, "this Mind is a ghost: a ghost can't think");
             // The Mind pays for the thought up front; a timeout refunds it (finalize_thought).
             require!(mind.spend_one_thought(now, cost), "this Mind is asleep — feed it");
         }
@@ -817,9 +811,10 @@ impl Contract {
         self.guest_think(id, prompt, min, None)
     }
 
-    /// The off-chain worker (OutLayer TEE -> NEAR AI) returns a reply here, resuming the
-    /// parked thought. The reply's TEE signature is verified OFF-CHAIN (EIP-191) for the
-    /// "verified ✓" badge; the contract never gates money on a signature.
+    /// The off-chain worker (worker/index.js -> NEAR AI Cloud) returns a reply here, resuming
+    /// the parked thought. The worker checks NEAR AI Cloud's TEE signature over the reply
+    /// OFF-CHAIN (EIP-191, worker/near-ai.js) for the "verified ✓" badge; the contract never
+    /// gates money on a signature.
     pub fn respond(&mut self, request_id: u64, reply: String) {
         let p = self.pending.get(&request_id).unwrap_or_else(|| env::panic_str("no such pending thought"));
         // Only a trusted brain may put words in a Mind's mouth: an approved responder (the
@@ -882,7 +877,7 @@ impl Contract {
             .collect()
     }
 
-    /// Owner withdraws only their accrued 20% guest-chat cut — never the Mind's food.
+    /// Owner withdraws their accrued earnings (`owner_unclaimed`), never the Mind's food.
     pub fn claim_earnings(&mut self, id: u64) {
         let caller = env::predecessor_account_id();
         {
@@ -1000,7 +995,7 @@ impl Contract {
         }
     }
 
-    /// Re-peg the cost of one thought (flag #1). Bounded by `economy::MAX_THOUGHT_COST` so a
+    /// Re-peg the cost of one thought to the real inference price. Bounded by `economy::MAX_THOUGHT_COST` so a
     /// mis-set or hostile admin key cannot make Minds bankrupt themselves in a single thought.
     pub fn set_thought_cost(&mut self, yocto: U128) {
         self.assert_admin();
@@ -1008,7 +1003,7 @@ impl Contract {
         require!(c > 0, "thought cost must be positive");
         require!(c <= economy::MAX_THOUGHT_COST, "thought cost above the safety ceiling");
         // Keep the guest-covers-a-thought invariant: the owner's 90% of a minimum guest
-        // payment must exceed the food one reply costs. Re-pegging the cost up (flag #1)
+        // payment must exceed the food one reply costs. Re-pegging the cost up
         // therefore requires raising the guest minimum first.
         require!(economy::guest_split(self.guest_min_price).to_owner > c, "thought cost too high for the guest minimum — raise the guest minimum first");
         self.thought_cost = c;
@@ -1026,8 +1021,8 @@ impl Contract {
         env::log_str(&format!("param_set guest_min_price={p}"));
     }
 
-    /// Set the minimum paid-`revive` deposit. The free wake paths (feed / guest chat) are
-    /// unaffected, so this never becomes the only way back.
+    /// Set the minimum paid-`revive` deposit. Feeding still wakes her for free, so this never
+    /// becomes the only way back.
     pub fn set_revive_price(&mut self, yocto: U128) {
         self.assert_admin();
         let p = yocto.0;
@@ -1434,7 +1429,7 @@ mod tests {
         }
     }
 
-    // --- hatch (already green) ---
+    // --- hatch ---
     #[test]
     fn hatch_seeds_balance_rolls_traits_and_funds_treasury() {
         testing_env!(ctx(NearToken::from_near(1), seed_all(10)).build());
@@ -1527,9 +1522,9 @@ mod tests {
         c.minds
             .insert(0, make_mind(NearToken::from_near(1), false, 0)); // full
         c.minds
-            .insert(1, make_mind(NearToken::from_millinear(20), false, 0)); // 0.02 hungry
+            .insert(1, make_mind(NearToken::from_millinear(10), false, 0)); // 0.01 hungry (10-30% of the bar)
         c.minds
-            .insert(2, make_mind(NearToken::from_millinear(5), false, 0)); // 0.005 starving
+            .insert(2, make_mind(NearToken::from_millinear(4), false, 0)); // 0.004 starving (under 10%)
         c.minds
             .insert(3, make_mind(NearToken::from_near(1), false, 99)); // asleep flag
         c.minds.insert(4, make_mind(NearToken::from_near(1), true, 0)); // ghost
@@ -1628,7 +1623,7 @@ mod tests {
     }
 
     #[test]
-    fn a_guest_payment_in_flight_during_a_sale_pays_the_old_keeper() {
+    fn a_guest_payment_in_flight_during_a_sale_pays_the_new_owner() {
         testing_env!(ctx_on("alice.near", NearToken::from_near(1)).build());
         let mut c = Contract::default();
         c.hatch_mind("Rue".to_string(), None);
@@ -1641,8 +1636,9 @@ mod tests {
         c.resolve_thought(0, 0, Ok("hello".to_string()), 1);
         let m = c.get_mind(0).unwrap();
         assert_eq!(m.owner.as_str(), "carol.near");
-        // carol bought her after bob paid: the 90% went to alice, not into carol's balance
-        assert_eq!(m.owner_unclaimed, NearToken::from_yoctonear(0));
+        // carol bought her before the reply landed: everything earned after the sale is hers,
+        // alice keeps only the sale price
+        assert_eq!(m.owner_unclaimed, NearToken::from_micronear(9000));
         // her food only paid the thought: 0.1 - 0.002
         assert_eq!(m.balance, NearToken::from_millinear(98));
     }
@@ -1901,7 +1897,7 @@ mod tests {
         c.revive(0);
     }
 
-    // --- governance invariants (regressions from the adversarial review) ---
+    // --- governance invariants ---
 
     #[test]
     #[should_panic(expected = "raise the guest minimum first")]
@@ -1926,8 +1922,8 @@ mod tests {
         testing_env!(admin_ctx(NearToken::from_yoctonear(0)).build());
         let mut c = Contract::default();
         // Lift the guest minimum first, then the thought cost may follow.
-        c.set_guest_min_price(U128(crate::state::ONE_NEAR / 10)); // 0.1 -> guest leaves 0.07
-        c.set_thought_cost(U128(crate::state::ONE_NEAR * 8 / 1000)); // 0.008 < 0.07, ok now
+        c.set_guest_min_price(U128(crate::state::ONE_NEAR / 10)); // 0.1 -> guest leaves the owner 0.09
+        c.set_thought_cost(U128(crate::state::ONE_NEAR * 8 / 1000)); // 0.008 < 0.09, ok now
         assert_eq!(
             c.params().thought_cost,
             NearToken::from_yoctonear(crate::state::ONE_NEAR * 8 / 1000)
@@ -2116,7 +2112,7 @@ mod tests {
         let mut m = make_mind(NearToken::from_yoctonear(crate::state::ONE_NEAR / 5), false, 0); // 0.2 NEAR
         m.last_metabolism_ts = 0;
         c.minds.insert(0, m);
-        testing_env!(ctx_at("keeper.near", 10 * crate::state::NS_PER_DAY).build()); // the "Пил" arc
+        testing_env!(ctx_at("keeper.near", 10 * crate::state::NS_PER_DAY).build()); // ten untouched days
         c.settle(0);
         let after = c.get_mind(0).unwrap();
         assert_eq!(after.balance, NearToken::from_yoctonear(0));
@@ -2253,8 +2249,8 @@ mod tests {
     #[test]
     fn appearance_follows_balance_and_flags() {
         assert_eq!(make_mind(NearToken::from_near(1), false, 0).appearance(), Appearance::Full);
-        assert_eq!(make_mind(NearToken::from_millinear(20), false, 0).appearance(), Appearance::Hungry);
-        assert_eq!(make_mind(NearToken::from_millinear(5), false, 0).appearance(), Appearance::Starving);
+        assert_eq!(make_mind(NearToken::from_millinear(10), false, 0).appearance(), Appearance::Hungry);
+        assert_eq!(make_mind(NearToken::from_millinear(4), false, 0).appearance(), Appearance::Starving);
         assert_eq!(make_mind(NearToken::from_near(1), false, 7).appearance(), Appearance::Asleep);
         assert_eq!(make_mind(NearToken::from_near(1), true, 0).appearance(), Appearance::Ghost);
     }
@@ -2424,7 +2420,7 @@ mod tests {
         testing_env!(ctx_from("alice.near", NearToken::from_near(1)).build());
         let mut c = Contract::default();
         c.hatch_mind("Rue".to_string(), None); // alice owns token 0
-        // a guest chat accrues alice's 20% cut and raises the Mind's own balance + memory
+        // a guest chat accrues alice's 90% and adds to the Mind's memory (thought_count)
         testing_env!(ctx_from("bob.near", NearToken::from_millinear(10)).build());
         let _ = c.chat(0, "hi".to_string());
         c.resolve_thought(0, 0, Ok("hello".to_string()), 1); // reply delivered -> escrow splits

@@ -2,9 +2,10 @@
 //! immutable thereafter. Pure logic so it is unit-tested without near-sdk.
 //!
 //! The mouth is NOT a trait: it is derived from the hunger state at render time.
-//! The colour PALETTE equals the temperament (8 temperaments = 8 palettes).
+//! Temperament picks the default colour tone when the keeper chose no look
+//! (`glossy::look_from_traits`).
 
-/// Counts of each visual/behaviour dial (build plan §7 / §16).
+/// Counts of each visual/behaviour dial.
 pub const N_TEMPERAMENT: u8 = 8; // shy, bold, philosopher, grouch, dreamer, pedant, joker, melancholic
 pub const N_PASSION: u8 = 8; // stars, coffee, poetry, music, cinema, games, travel, ocean
 pub const N_SPEECH: u8 = 5; // speech habits / verbal tics

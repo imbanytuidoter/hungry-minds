@@ -1,7 +1,7 @@
-//! On-chain art. A Mind's appearance is assembled here from its visual traits and
-//! its current life-state — no image is stored, the SVG is a pure function of state,
-//! so `svg_for` always renders the *current* creature (full, hungry, asleep, ghost).
-//! Design concept (build plan §17): a small window into a living creature. Temperament
+//! The first renderer: a Mind drawn from its trait dials and its life-state (full,
+//! hungry, asleep, ghost). The token itself is now drawn by `glossy.rs`; this module
+//! keeps `Appearance` (used by glossy) and the older renderer with its tests.
+//! Design concept: a small window into a living creature. Temperament
 //! is the room's weather (the palette); hunger is written on the face; body, eyes,
 //! accessory and pattern make each one itself. (Passion and speech are behavioural
 //! dials — they shape the AI voice, not the picture.)
@@ -235,7 +235,6 @@ fn accessory_shape(v: usize, accent: &str, ink: &str) -> String {
 
 /// Assemble the full SVG document for a Mind. Self-contained (its own background),
 /// deterministic, and small enough to return inline (well under the 4 MiB view cap).
-/// This is the canonical on-chain art (framed window), used by `svg_for`/`nft_token`.
 pub fn render(face: &Face) -> String {
     render_inner(face, true)
 }
@@ -487,8 +486,7 @@ figcaption{{margin-top:8px;font-size:11px;color:#79828f}}</style>\
         println!("gallery written to {out}");
     }
 
-    /// Exports the REAL contract art as JSON for the web app's preview mode, so the
-    /// site shows exactly what the chain renders. Run with SAMPLES_OUT set.
+    /// Exports this renderer's art as JSON (run with SAMPLES_OUT set).
     #[test]
     #[ignore]
     fn export_samples() {

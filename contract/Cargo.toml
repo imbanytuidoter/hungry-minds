@@ -2,7 +2,7 @@
 name = "hungry-minds-contract"
 version = "0.1.0"
 edition = "2021"
-description = "Hungry Minds — NEP-171 AI-pet that pays for its own thoughts. Core logic crate (near-sdk wired in later)."
+description = "Hungry Minds — NEP-171 Minds that pay for their own AI replies from their own food balance."
 
 [lib]
 crate-type = ["cdylib", "rlib"]

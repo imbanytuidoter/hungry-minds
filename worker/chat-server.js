@@ -63,7 +63,7 @@ function readBody(req, limit = 20_000) {
   });
 }
 
-function startChatServer({ account, view, contractId, workerId, askLLM, plan = null, proofOf = () => null, fallbackReply, cleanReply, dir, gateway = null }) {
+function startChatServer({ account, view, contractId, workerId, askLLM, plan = null, proofOf = () => null, fallbackReply, cleanReply, dir, gateway = null, x402 = null }) {
   const secret = secretFor(dir, contractId);
   const ledger = new Ledger(path.join(dir, `.chat-ledger-${contractId}.json`));
   const log = path.join(dir, `.chat-log-${contractId}.jsonl`);
@@ -90,7 +90,7 @@ function startChatServer({ account, view, contractId, workerId, askLLM, plan = n
       const left = bal > unpaid ? Number((bal - unpaid) / cost) : 0;
       return { mind, state, own, left, error: left < 1 || state === "asleep" ? `${mind.name} is too hungry to talk. Feed her first.` : null };
     }
-    if (state === "asleep") return { mind, state, own, left: 0, error: `${mind.name} is asleep. Only her keeper can feed her.` };
+    if (state === "asleep") return { mind, state, own, left: 0, error: `${mind.name} is asleep. Anyone can feed her to wake her.` };
     const credits = yocto(await view("chat_credits_of", { account_id: payer }));
     const unpaid = BigInt(ledger.pendingGuest(payer)) * price;
     const left = credits > unpaid ? Number((credits - unpaid) / price) : 0;
@@ -249,6 +249,7 @@ function startChatServer({ account, view, contractId, workerId, askLLM, plan = n
     };
     try {
       const url = new URL(req.url, "http://localhost");
+      if (x402 && url.pathname.startsWith("/agent/x402/")) return await x402.route(req, res, url, readBody);
       if (gateway && url.pathname.startsWith("/agent/")) return await gateway.route(req, res, url, readBody, send);
       if (req.method === "POST" && url.pathname === "/session") return send(...(await onSession(await readBody(req))));
       if (req.method === "POST" && url.pathname === "/chat") return send(...(await onChat(await readBody(req))));

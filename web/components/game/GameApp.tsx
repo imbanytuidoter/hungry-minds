@@ -1,22 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import AccountPanel from "./AccountPanel";
+import AccountPanel, { ColonyList } from "./AccountPanel";
 import ChatPanel from "./ChatPanel";
 import { CornerDecor, SoftLeaf } from "./Decor";
+import ThemeScene from "./ThemeScene";
 import Dome, { type DomeFx } from "./Dome";
 import Entry from "./Entry";
+import { SoldCard, useSold } from "./AfterSale";
 import { useGame } from "./GameProvider";
-import GlossyMind from "./GlossyMind";
 import Header, { ConnectButtons, NetworkSwitch } from "./Header";
 import { NETWORK, notLaunched, switchNetwork, WALLET_KIND } from "@/lib/chain";
 import { FeedPanel, LifePanel, TodayPanel } from "./HomePanels";
 import RadioPanel from "./RadioPanel";
-import ShopPanel from "./ShopPanel";
+import ShopPanel, { type ShopMode } from "./ShopPanel";
 import { stateOf, type MindRec } from "@/lib/game/engine";
-import { L, LANGS, type Lang } from "@/lib/game/i18n";
+import { L, type Lang } from "@/lib/game/i18n";
 import type { Category, Offer } from "@/lib/game/services";
 import { useWeather } from "@/lib/game/weather";
+import Logo from "@/components/Logo";
 
 const NAV_ICONS = [
   "M4 11l8-7 8 7v9h-5v-6H9v6H4z",
@@ -28,10 +30,40 @@ const NAV_ICONS = [
 
 type Tab = 0 | 1 | 2 | 3;
 
+/** The site's colour theme: ?theme=<name> picks one and it is remembered (game.css themes). */
+export const THEMES = ["seed", "garden", "cosmos", "jungle", "desert", "abyss", "paper"] as const;
+export const PALETTES = ["gold", "ours", "plum", "midnight", "ice"] as const;
+function useTheme() {
+  useEffect(() => {
+    let t: string | null = new URLSearchParams(window.location.search).get("theme");
+    try {
+      if (t && (THEMES as readonly string[]).includes(t)) localStorage.setItem("hm-theme", t);
+      else t = localStorage.getItem("hm-theme");
+    } catch {
+      /* private window: the theme lasts this page only */
+    }
+    document.documentElement.dataset.theme = t && (THEMES as readonly string[]).includes(t) ? t : "seed";
+    // seed palettes: Ice (sky blue on deep teal) is the default; ?p=gold|ours|plum|midnight|ice
+    // previews another for one visit and is not remembered
+    const p = new URLSearchParams(window.location.search).get("p");
+    const pal = p && (PALETTES as readonly string[]).includes(p) ? p : "ice";
+    if (pal === "gold") delete document.documentElement.dataset.palette;
+    else document.documentElement.dataset.palette = pal;
+    // light or dark, from the header toggle (components/ModeToggle.tsx); dark is the default
+    try {
+      if (localStorage.getItem("hm-mode") === "light") document.documentElement.dataset.mode = "light";
+    } catch {
+      /* private window */
+    }
+  }, []);
+}
+
 export default function GameApp() {
+  useTheme();
   const g = useGame();
   const wx = useWeather();
-  const [lang, setLangState] = useState<Lang>("en");
+  // Only the English copy is complete, so the game stays in English.
+  const lang: Lang = "en";
   const [entry, setEntry] = useState<boolean | null>(null);
   const [tab, setTab] = useState<Tab>(0);
   const [activeId, setActiveId] = useState<number | null>(null);
@@ -43,24 +75,10 @@ export default function GameApp() {
   // The network is read from this browser, so decide "not launched" only after mount.
   const [mounted, setMounted] = useState(false);
   const [browsing, setBrowsing] = useState(false);
+  const [shopMode, setShopMode] = useState<ShopMode>("market");
   useEffect(() => setMounted(true), []);
+  const [sold, clearSold] = useSold();
 
-  useEffect(() => {
-    try {
-      const l = localStorage.getItem("hm-lang") as Lang | null;
-      if (l && LANGS.includes(l)) setLangState(l);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-  const setLang = (l: Lang) => {
-    setLangState(l);
-    try {
-      localStorage.setItem("hm-lang", l);
-    } catch {
-      /* ignore */
-    }
-  };
 
   // First visit (no Mind yet) opens on the colony entry; a returning keeper goes home.
   // The account (wallet / burner) can load after the first chain read, so a keeper's Minds
@@ -77,6 +95,23 @@ export default function GameApp() {
     }
   }, [g.ready, g.mine.length, entry]);
 
+  // Deep links: /app?tab=home|shop|chat|account, /app?hatch=1
+  const linked = useRef(false);
+  useEffect(() => {
+    if (!g.ready || linked.current) return;
+    linked.current = true;
+    const q = new URLSearchParams(window.location.search);
+    const tabs: Record<string, Tab> = { home: 0, shop: 1, chat: 2, account: 3 };
+    if (q.get("hatch")) {
+      autoEntry.current = false;
+      setEntry(true);
+    } else if (q.get("tab") && q.get("tab")! in tabs) {
+      autoEntry.current = false;
+      setEntry(false);
+      setTab(tabs[q.get("tab")!]);
+    }
+  }, [g.ready]);
+
   const T = L[lang];
   const own: MindRec | null = g.mine.find((m) => m.id === activeId) ?? g.mine[g.mine.length - 1] ?? null;
   const visiting = visitId !== null ? (g.minds.find((m) => m.id === visitId) ?? null) : null;
@@ -86,6 +121,15 @@ export default function GameApp() {
     setEntry(false);
     setTab(t);
     if ("visit" in opts) setVisitId(opts.visit ?? null);
+  };
+  // the marketplace: Shop → Buy & sell Minds
+  const toBuy = () => {
+    setShopMode("nft");
+    go(1, { visit: null });
+  };
+  const toHatch = () => {
+    autoEntry.current = false;
+    setEntry(true);
   };
 
   const onFed = (emoji: string, qty: number) => {
@@ -99,14 +143,13 @@ export default function GameApp() {
     return (
       <div className="hm" style={{ alignItems: "center", justifyContent: "center" }}>
         <CornerDecor />
+        <ThemeScene />
         <div style={{ position: "absolute", top: 22, right: 22 }}>
           <NetworkSwitch />
         </div>
-        <div style={{ maxWidth: 520, padding: 28, borderRadius: 30, background: "rgba(255,255,255,.82)", border: "1.5px solid #fff", boxShadow: "0 20px 50px rgba(180,90,140,.14)", display: "flex", flexDirection: "column", gap: 14, textAlign: "center", alignItems: "center" }}>
-          <div style={{ width: 110, aspectRatio: "200/210" }}>
-            <GlossyMind mood="asleep" />
-          </div>
-          <span style={{ fontWeight: 600, fontSize: 26, letterSpacing: "-.02em", color: "var(--ink-strong)" }}>Not on mainnet yet</span>
+        <div style={{ maxWidth: 520, padding: 28, borderRadius: 30, background: "color-mix(in srgb, var(--surface) 82%, transparent)", border: "1.5px solid #fff", boxShadow: "0 20px 50px rgba(180,90,140,.14)", display: "flex", flexDirection: "column", gap: 14, textAlign: "center", alignItems: "center" }}>
+          <Logo size={88} word={false} />
+          <span style={{ fontWeight: 600, fontSize: 26, letterSpacing: "-.02em", color: "var(--ink-strong)" }}>Mainnet soon</span>
           <span style={{ fontSize: 15, lineHeight: 1.5, color: "var(--muted-2)" }}>
             Hungry Minds has no mainnet contract yet: it launches there after an audit. Everything playable today is real and on NEAR testnet, with free test NEAR.
           </span>
@@ -120,7 +163,8 @@ export default function GameApp() {
 
   if (!g.ready || entry === null) {
     return (
-      <div className="hm" style={{ alignItems: "center", justifyContent: "center" }}>
+      <div className="hm" style={{ alignItems: "center", justifyContent: "center", gap: 16 }}>
+        <Logo size={72} word={false} />
         <span className="sub">Waking the colony…</span>
       </div>
     );
@@ -129,10 +173,8 @@ export default function GameApp() {
   // Every page load asks to sign in (live mode). Browsing without an account stays possible.
   const signPrompt = g.mode === "live" && !g.account && !browsing && (
     <div role="dialog" aria-modal="true" aria-label="Sign in" style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(60,30,50,.28)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div style={{ maxWidth: 460, width: "100%", padding: 28, borderRadius: 30, background: "rgba(255,255,255,.95)", border: "1.5px solid #fff", boxShadow: "0 20px 50px rgba(180,90,140,.18)", display: "flex", flexDirection: "column", gap: 14, alignItems: "center", textAlign: "center" }}>
-        <div style={{ width: 96, aspectRatio: "200/210" }}>
-          <GlossyMind />
-        </div>
+      <div style={{ maxWidth: 460, width: "100%", padding: 28, borderRadius: 30, background: "color-mix(in srgb, var(--surface) 95%, transparent)", border: "1.5px solid #fff", boxShadow: "0 20px 50px rgba(180,90,140,.18)", display: "flex", flexDirection: "column", gap: 14, alignItems: "center", textAlign: "center" }}>
+        <Logo size={88} word={false} />
         <span style={{ fontWeight: 600, fontSize: 24, letterSpacing: "-.02em", color: "var(--ink-strong)" }}>Sign in to play</span>
         <span style={{ fontSize: 14.5, lineHeight: 1.5, color: "var(--muted-2)" }}>Your Minds, food and earnings live on NEAR {NETWORK} under your account. Connect {WALLET_KIND} to continue.</span>
         <ConnectButtons big />
@@ -141,6 +183,18 @@ export default function GameApp() {
         </button>
       </div>
     </div>
+  );
+
+  const soldCard = sold.length > 0 && (
+    <SoldCard
+      sold={sold}
+      onHatch={() => (clearSold(), toHatch())}
+      onBuy={() => (clearSold(), toBuy())}
+      onClose={() => {
+        clearSold();
+        if (!g.mine.length) go(0, { visit: null });
+      }}
+    />
   );
 
   const toast = g.error && (
@@ -156,9 +210,9 @@ export default function GameApp() {
     return (
       <div className="hm">
         <CornerDecor />
+        <ThemeScene />
         <Entry
           lang={lang}
-          setLang={setLang}
           onHatched={(id) => {
             if (id !== null && id >= 0) setActiveId(id);
             go(0, { visit: null });
@@ -169,8 +223,10 @@ export default function GameApp() {
             go(1, { visit: null });
           }}
           goVisit={() => go(3, { visit: null })}
+          goBuy={toBuy}
         />
         {toast}
+        {soldCard}
         {signPrompt}
       </div>
     );
@@ -182,14 +238,15 @@ export default function GameApp() {
   return (
     <div className="hm">
       <CornerDecor />
-      <Header mind={own} lang={lang} setLang={setLang} onLogo={() => ((autoEntry.current = false), setEntry(true))} onEarnings={() => go(1)} pickMind={(id) => setActiveId(id)} />
+      <ThemeScene />
+      <Header mind={own} onLogo={() => ((autoEntry.current = false), setEntry(true))} onEarnings={() => ((setShopMode("earn"), go(1)))} pickMind={(id) => setActiveId(id)} />
 
       <div className={`hm-grid${wideRight ? " wide-right" : ""}`}>
         <div className="hm-left">
           <nav className="glass hm-nav" aria-label="Main">
             {T.nav.map((label, i) => (
               <button key={label} aria-current={tab === i ? "page" : undefined} onClick={() => go(i as Tab, i === 0 || i === 3 ? { visit: null } : {})}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4A2E44" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--ink)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <path d={NAV_ICONS[i]} />
                 </svg>
                 {label}
@@ -214,7 +271,7 @@ export default function GameApp() {
           </div>
         </div>
 
-        <Dome mind={subject} T={T} wx={wx} fx={fx} visiting={!!visiting} onBack={() => go(visiting && !g.mine.length ? 3 : 0, { visit: null })} guest={!subject} onHatch={() => setEntry(true)} onBrowse={() => go(3, { visit: null })} />
+        <Dome mind={subject} T={T} wx={wx} fx={fx} visiting={!!visiting} onBack={() => go(visiting && !g.mine.length ? 3 : 0, { visit: null })} guest={!subject} onHatch={toHatch} onBuy={toBuy} onBrowse={() => go(3, { visit: null })} />
 
         <div className="hm-right">
           {tab === 0 && subject && (
@@ -224,14 +281,16 @@ export default function GameApp() {
               <TodayPanel mind={subject} />
             </>
           )}
-          {tab === 0 && !subject && (
-            <section className="glass panel">
-              <span className="panel-title">Welcome</span>
-              <span className="sub">Hatch your own Mind, or visit one from the colony and keep it fed.</span>
+          {(tab === 0 || tab === 2) && !subject && (
+            <section className="glass panel hm-colony-scroll" style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+              <ColonyList title="Visit a Mind" visit={(id) => go(tab === 2 ? 2 : 3, { visit: id })} />
             </section>
           )}
           {tab === 1 && (
             <ShopPanel
+              key={shopMode}
+              initialMode={shopMode}
+              toHatch={() => setEntry(true)}
               cat={cat}
               setCat={setCat}
               order={(m, s, prefill) => {
@@ -242,21 +301,17 @@ export default function GameApp() {
             />
           )}
           {tab === 2 && subject && <ChatPanel mind={subject} service={service && visiting?.id === service.mindId ? service : null} clearService={() => setService(null)} />}
-          {tab === 2 && !subject && (
-            <section className="glass panel">
-              <span className="panel-title">Chat</span>
-              <span className="sub">Pick a Mind to talk to on the Account tab, or hatch your own.</span>
-            </section>
-          )}
           {tab === 3 && visiting && (
             <>
               <LifePanel mind={visiting} />
               {!visiting.ghost && (
                 <>
                   <FeedPanel mind={visiting} onFed={onFed} />
-                  <button className="btn-cta" onClick={() => go(2)} disabled={st === "asleep"}>
-                    {st === "asleep" ? `Wake ${visiting.name} to chat` : `Pay to chat with ${visiting.name} · ${g.params.guestMinPrice} NEAR`}
-                  </button>
+                  <section className="glass panel" style={{ padding: "14px 18px" }}>
+                    <button className="btn-ink" style={{ width: "100%", padding: "12px 16px", fontSize: 15 }} onClick={() => go(2)} disabled={st === "asleep"}>
+                      {st === "asleep" ? `Wake ${visiting.name} to chat` : `Pay to chat with ${visiting.name} · ${g.params.guestMinPrice} NEAR a message`}
+                    </button>
+                  </section>
                 </>
               )}
             </>
@@ -270,17 +325,18 @@ export default function GameApp() {
             <span style={{ fontWeight: 600, fontSize: 17 }}>{T.env}</span>
             <span style={{ fontSize: 28, fontWeight: 600, letterSpacing: "-.02em" }}>{wx.temp == null ? "…" : `${Math.round(wx.temp)}°C`}</span>
             <span className="sub">
-              {!wx.day && wx.kind === "clear" ? T.wx.night : T.wx[wx.kind]}
-              {wx.city ? ` · ${wx.city}` : ""}
+              {wx.temp == null ? "\u00a0" : !wx.day && wx.kind === "clear" ? T.wx.night : T.wx[wx.kind]}
+              {wx.temp != null && wx.city ? ` · ${wx.city}` : ""}
             </span>
           </div>
-          <div style={{ width: 96, height: 76, borderRadius: 16, overflow: "hidden", position: "relative", background: "linear-gradient(180deg,#F9C6DA 0%,#F6E0EA 45%,#BFE3B8 46%,#8CCB8A 100%)", border: "1.5px solid rgba(255,255,255,.9)" }}>
+          <div className="hm-wx-pic" style={{ width: 96, height: 76, borderRadius: 16, overflow: "hidden", position: "relative", background: "linear-gradient(180deg,#F9C6DA 0%,#F6E0EA 45%,#BFE3B8 46%,#8CCB8A 100%)", border: "1.5px solid color-mix(in srgb, var(--surface) 90%, transparent)" }}>
             <div style={{ position: "absolute", left: "-10%", right: "30%", top: "40%", height: "40%", borderRadius: "50%", background: "#A7D79C" }} />
             <div style={{ position: "absolute", left: "40%", right: "-20%", top: "46%", height: "40%", borderRadius: "50%", background: "#7FC07E" }} />
           </div>
         </section>
       </div>
       {toast}
+      {soldCard}
       {signPrompt}
     </div>
   );

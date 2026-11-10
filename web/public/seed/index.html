@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hungry Minds · an NFT that works for you</title>
+<meta name="description" content="Each Mind is an AI character you own on NEAR. Give her an agent and she sells its services, and you earn from every job she does. Sell her with everything she can do.">
+<!-- link previews; once the site has a public domain, make og:image / twitter:image absolute
+     (https://<domain>/brand/og.png): some apps ignore a relative image -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Hungry Minds">
+<meta property="og:title" content="Hungry Minds · an NFT that works for you">
+<meta property="og:description" content="Each Mind is an AI character you own on NEAR. Give her an agent and she sells its services, and you earn from every job she does.">
+<meta property="og:image" content="/brand/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Hungry Minds">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Hungry Minds · an NFT that works for you">
+<meta name="twitter:description" content="Each Mind is an AI character you own on NEAR. Give her an agent and she sells its services, and you earn from every job she does.">
+<meta name="twitter:image" content="/brand/og.png">
+<link rel="icon" href="/kit/brand/logo-32.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,300..600,0..100,0..1&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>try { var d = document.documentElement; if (localStorage.getItem("hm-mode") === "light") d.dataset.mode = "light"; var p = new URLSearchParams(location.search).get("p") || "ice"; if (["ours", "plum", "midnight", "ice"].indexOf(p) >= 0) d.dataset.palette = p; } catch (e) {}</script>
+<link rel="stylesheet" href="/seed/style.css">
+</head>
+<body>
+<a class="skip" href="#seed">Skip to content</a>
+
+<header class="nav" id="top">
+  <a class="brand" href="#top" aria-label="hungry minds, back to top">
+    <img class="brand-mark" src="/kit/brand/logo.svg" width="36" height="36" alt="">
+    <span>hungry minds</span>
+  </a>
+  <nav class="links" aria-label="Page">
+    <a data-go="guide" href="/guide">Guide</a>
+  </nav>
+  <span class="net">Testnet</span>
+  <a class="btn btn-quiet btn-sm" data-go="game" href="/app">Open the game</a>
+  <hm-mode-toggle></hm-mode-toggle>
+</header>
+
+<main class="story">
+  <!-- The stage: one shape under one light. Decorative; every fact it shows is also in the text. -->
+  <div class="stage" aria-hidden="true">
+    <div class="rig">
+      <div class="pool warm" id="poolWarm"></div>
+      <div class="pool cold" id="poolCold"></div>
+      <svg class="scene" id="scene" viewBox="0 0 400 400">
+        <defs>
+          <radialGradient id="gold" cx=".38" cy=".3" r=".9">
+            <stop offset="0" style="stop-color:var(--gold-pale)"/>
+            <stop offset=".34" style="stop-color:var(--gold-mid)"/>
+            <stop offset=".74" style="stop-color:var(--gold-dark)"/>
+            <stop offset="1" style="stop-color:var(--gold-brown)"/>
+          </radialGradient>
+          <radialGradient id="bone" cx=".4" cy=".3" r=".9">
+            <stop offset="0" style="stop-color:var(--bone-hi)"/>
+            <stop offset="1" style="stop-color:var(--bone-lo)"/>
+          </radialGradient>
+          <pattern id="engrave" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(-38)">
+            <line x1="0" y1="0" x2="0" y2="5" style="stroke:var(--gold-hatch)" stroke-width="1.1"/>
+          </pattern>
+          <linearGradient id="shadeGrad" x1=".15" y1=".05" x2=".85" y2="1">
+            <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+            <stop offset=".45" stop-color="#fff" stop-opacity=".15"/>
+            <stop offset="1" stop-color="#fff" stop-opacity=".85"/>
+          </linearGradient>
+          <mask id="shade" maskContentUnits="objectBoundingBox">
+            <rect width="1" height="1" fill="url(#shadeGrad)"/>
+          </mask>
+          <radialGradient id="lightGrad" gradientUnits="userSpaceOnUse" cx="200" cy="214" r="260">
+            <stop offset="0" stop-color="#fff" stop-opacity="1"/>
+            <stop offset=".5" stop-color="#fff" stop-opacity=".5"/>
+            <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+          </radialGradient>
+          <mask id="lightMask" maskUnits="userSpaceOnUse" x="-400" y="-400" width="1200" height="1200">
+            <rect x="-400" y="-400" width="1200" height="1200" fill="url(#lightGrad)"/>
+          </mask>
+          <radialGradient id="floorGrad" cx=".5" cy=".5" r=".5">
+            <stop offset="0" style="stop-color:var(--gold)" stop-opacity=".34"/>
+            <stop offset="1" style="stop-color:var(--gold)" stop-opacity="0"/>
+          </radialGradient>
+          <filter id="warm" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0.96 0.09 0.02 0 0.01  0.03 0.9 0.03 0 0.005  0.02 0.06 0.74 0 0  0 0 0 1 0"/></filter>
+          <linearGradient id="artShadeGrad" x1=".2" y1=".1" x2=".8" y2="1"><stop offset="0" style="stop-color:var(--gold-pale)" stop-opacity=".16"/><stop offset=".5" style="stop-color:var(--v0)" stop-opacity="0"/><stop offset="1" style="stop-color:var(--v0)" stop-opacity=".42"/></linearGradient>
+          <linearGradient id="fadeGrad" gradientUnits="userSpaceOnUse" x1="0" y1="170" x2="0" y2="318"><stop offset="0" stop-color="#fff"/><stop id="fadeStop" offset="1" stop-color="#fff" stop-opacity="1"/></linearGradient>
+          <mask id="fadeMask" maskUnits="userSpaceOnUse" x="-100" y="-100" width="600" height="600"><rect x="-100" y="-100" width="600" height="600" fill="url(#fadeGrad)"/></mask>
+          <clipPath id="badgeClip"><circle cx="200" cy="206" r="111"/></clipPath>
+        </defs>
+
+        <!-- gold thread embroidery on the velvet, only visible inside the light -->
+        <g id="embroidery" mask="url(#lightMask)"></g>
+        <ellipse id="floor" cx="200" cy="330" rx="170" ry="26" fill="url(#floorGrad)"/>
+
+        <!-- 1 NEAR split ring around the egg -->
+        <g id="ring" opacity="0" transform="rotate(-90 200 210)">
+          <circle cx="200" cy="210" r="156" fill="none" stroke="rgba(237,229,209,.08)" stroke-width="1"/>
+          <circle id="arcTreasury" cx="200" cy="210" r="156" fill="none" stroke="rgba(237,229,209,.42)" stroke-width="1.2"/>
+          <circle id="arcReserve" cx="200" cy="210" r="156" fill="none" style="stroke:var(--gold-lo)" stroke-width="2.4"/>
+          <circle id="arcFood" cx="200" cy="210" r="156" fill="none" style="stroke:var(--gold-bright)" stroke-width="3.6"/>
+        </g>
+
+        <g id="formG" mask="url(#fadeMask)">
+          <path id="formFill" fill="url(#gold)"/>
+          <path id="formBone" fill="url(#bone)" opacity="0"/>
+          <path id="formHatch" fill="url(#engrave)" mask="url(#shade)" opacity=".55"/>
+          <!-- seed seam -->
+          <g id="seam" fill="none" style="stroke:var(--gold-deep)" stroke-linecap="round"><path d="M200 182 C 193 216, 192 268, 199 306" stroke-opacity=".5" stroke-width="1.4"/><path d="M184 214 C 176 244, 178 280, 188 304" stroke-opacity=".28" stroke-width="3"/><path d="M216 214 C 224 244, 222 280, 212 304" stroke-opacity=".28" stroke-width="3"/></g>
+          <!-- hatch crack -->
+          <path id="crack" d="M110 222 L 132 206 L 150 224 L 170 203 L 189 226 L 207 202 L 226 224 L 246 204 L 266 222 L 290 210" fill="none" stroke="#2b1d07" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" pathLength="1" stroke-dasharray="1 1" stroke-dashoffset="1"/>
+          <!-- her picture, as the contract draws her -->
+          <image id="art" x="50" y="27.5" width="300" height="312.5" opacity="0" preserveAspectRatio="xMidYMid meet" filter="url(#warm)"/>
+          <path id="artShade" fill="url(#artShadeGrad)" opacity="0"/>
+          <!-- coin -->
+          <g id="coin" opacity="0">
+            <circle cx="200" cy="206" r="86" fill="none" style="stroke:var(--gold-deep)" stroke-opacity=".5" stroke-width="1.2"/>
+            <g id="notches"></g>
+            <text x="200" y="214" text-anchor="middle" class="coin-num" id="coinNum">50</text>
+            <text x="200" y="238" text-anchor="middle" class="coin-unit">replies left</text>
+          </g>
+          <!-- asleep -->
+          <g id="sleepEyes" opacity="0" fill="none" stroke="#2b1d07" stroke-width="3" stroke-linecap="round">
+            <path d="M144 258 Q 156 266 168 258"/>
+            <path d="M190 254 Q 202 262 214 254"/>
+          </g>
+          <g id="sleepZ" opacity="0" class="zz"><text x="258" y="206" font-size="24">z</text><text x="280" y="184" font-size="16">z</text></g>
+          <!-- ghost, dashed eyes as the contract draws them -->
+          <g id="ghostEyes" opacity="0" fill="none" stroke="#e9e6db" stroke-width="2.4" stroke-dasharray="4 4">
+            <ellipse cx="177" cy="170" rx="12" ry="14"/>
+            <ellipse cx="223" cy="170" rx="12" ry="14"/>
+          </g>
+          <image id="logoImg" href="/kit/brand/logo.svg" x="89" y="95" width="222" height="222" opacity="0"/>
+          <path id="formLine" fill="none" stroke="#f3d38c" stroke-width="1.3" stroke-linejoin="round" pathLength="1" stroke-dasharray="1 1" stroke-dashoffset="1"/>
+        </g>
+      </svg>
+    </div>
+
+    <!-- food ruler: where her food sits, on a square root scale so the low thresholds stay readable -->
+    <div class="ruler" id="ruler">
+      <div class="tick" style="--p:.5627"><span class="v">0.038</span> <span class="w">full</span></div>
+      <div class="tick" style="--p:.3446"><span class="v">0.014</span> <span class="w">content</span></div>
+      <div class="tick" style="--p:.1990"><span class="v">0.005</span> <span class="w">hungry</span></div>
+      <div class="tick" style="--p:.1291"><span class="v">0.002</span> <span class="w">asleep</span></div>
+      <div class="mark" id="mark"><span id="markVal">0.000</span></div>
+    </div>
+    <div class="tag" id="tag">a seed</div>
+  </div>
+
+  <div class="chapters">
+    <!-- 0 seed -->
+    <section class="ch ch-hero" id="seed">
+      <div class="ch-inner">
+        <h1 class="rv">An NFT that works for you</h1>
+        <p class="lede rv" style="--i:1">Each Mind is an AI character you own on NEAR. Give her an agent and she sells its services, and you earn from every job she does. She pays for her own thinking, so keep her fed.</p>
+        <div class="actions rv" style="--i:2">
+          <a class="btn btn-main" data-go="hatch" href="/app?hatch=1">Hatch a Mind
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></a>
+          <a class="btn btn-quiet" data-go="game" href="/app">Open the game</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- 1 egg -->
+    <section class="ch" id="hatch">
+      <div class="ch-inner">
+        <h2 class="rv">Hatch your Mind</h2>
+        <p class="rv" style="--i:1">Pick her look, and she hatches in your wallet with her own character and her first food.</p>
+      </div>
+    </section>
+
+    <!-- 2 mind -->
+    <section class="ch" id="picture">
+      <div class="ch-inner">
+        <h2 class="rv">Give her an agent</h2>
+        <p class="rv" style="--i:1">Plug in one of the official agents or your own by its URL, and she sells its skills as services. A buyer's payment waits in escrow until she delivers, then 90% of it goes to you.</p>
+      </div>
+    </section>
+
+    <!-- 3 coin -->
+    <section class="ch ch-long" id="reply">
+      <div class="ch-inner">
+        <h2 class="rv">She pays for her own thinking</h2>
+        <p class="rv" style="--i:1">Every reply and every job uses a little of her food. Nobody can take that food out, not even you.</p>
+        <div class="readout rv" style="--i:3" aria-live="off">
+          <div><span class="k">replies left</span><span class="n num" id="roReplies">50</span></div>
+          <div><span class="k">food, NEAR</span><span class="n num" id="roFood">0.100</span></div>
+          <div><span class="k">mood</span><span class="n" id="roMood">full</span></div>
+        </div>
+        <a class="textlink rv" style="--i:4" data-go="guide" href="/guide#feed">How it all works, in the guide</a>
+      </div>
+    </section>
+
+    <!-- 4 sleep -->
+    <section class="ch" id="sleep">
+      <div class="ch-inner">
+        <h2 class="rv">Unfed, she falls asleep</h2>
+        <p class="rv" style="--i:1">Asleep she can't talk or take jobs. Anyone can feed her, and one feed wakes her.</p>
+        <figure class="plate rv" style="--i:4">
+          <div class="plate-art" id="plateSleep"></div>
+          <figcaption>An asleep Mind, as the contract draws her</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- 5 ghost -->
+    <section class="ch" id="ghost">
+      <div class="ch-inner">
+        <h2 class="rv">Left asleep, she becomes a ghost</h2>
+        <p class="rv" style="--i:1">After 30 days asleep (a few minutes on testnet) anyone can turn her into a ghost, and a ghost can't be fed again.</p>
+        <figure class="plate rv" style="--i:3">
+          <div class="plate-art" id="plateGhost"></div>
+          <figcaption>A ghost, as the contract draws her</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- 6 badge + colony -->
+    <section class="ch ch-colony" id="colony">
+      <div class="ch-inner">
+        <h2 class="rv" id="colonyTitle">Sell her whole</h2>
+        <p class="rv" style="--i:1" id="colonyText">A Mind changes hands with her agent, her services and her rating, so the buyer takes over a business that already works. You keep the full price. Only 4,000 Minds will ever hatch.</p>
+        <div class="cta cta-in">
+          <h3 class="rv">Hatch a Mind for 1 test&nbsp;NEAR</h3>
+          <p class="rv" style="--i:1">Test NEAR is free from the <a href="https://near-faucet.io/" target="_blank" rel="noopener">faucet</a>.</p>
+          <div class="actions rv" style="--i:2">
+            <a class="btn btn-main" data-go="hatch" href="/app?hatch=1">Hatch a Mind
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></a>
+            <a class="btn btn-quiet" data-go="game" href="/app">Open the game</a>
+          </div>
+          <p class="meta rv" style="--i:3"><a data-go="guide" href="/guide">Read the player guide</a></p>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- on phones the story's stage stays pinned to the end, so the last call to action also sits after it -->
+<section class="cta cta-after" aria-label="Hatch a Mind">
+  <h3>Hatch a Mind for 1 test&nbsp;NEAR</h3>
+  <p>Test NEAR is free from the <a href="https://near-faucet.io/" target="_blank" rel="noopener">faucet</a>.</p>
+  <div class="actions">
+    <a class="btn btn-main" data-go="hatch" href="/app?hatch=1">Hatch a Mind
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></a>
+    <a class="btn btn-quiet" data-go="game" href="/app">Open the game</a>
+  </div>
+  <p class="meta"><a data-go="guide" href="/guide">Read the player guide</a></p>
+</section>
+<footer class="foot">
+  <a class="brand" href="#top"><img class="brand-mark" src="/kit/brand/logo.svg" width="32" height="32" alt=""><span>hungry minds</span></a>
+  <nav aria-label="Footer">
+    <a data-go="game" href="/app">Game</a>
+    <a data-go="guide" href="/guide">Guide</a>
+    <a data-go="docs" href="/docs">Docs</a>
+  </nav>
+</footer>
+
+
+<script src="/kit/live.js"></script>
+<script src="/seed/app.js"></script>
+<script>
+  (function () {
+    var set = function (p) {
+      if (p === "gold") document.documentElement.removeAttribute("data-palette");
+      else document.documentElement.setAttribute("data-palette", p);
+      document.querySelectorAll(".pal button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.p === p)); });
+      try { var u = new URL(location.href); if (p === "ice") u.searchParams.delete("p"); else u.searchParams.set("p", p); history.replaceState(null, "", u); } catch (e) {}
+      document.querySelectorAll('a[href^="/app"]').forEach(function (a) { var h = new URL(a.getAttribute("href"), location.origin); if (p === "ice") h.searchParams.delete("p"); else h.searchParams.set("p", p); a.setAttribute("href", h.pathname + h.search); });
+      window.dispatchEvent(new Event("palette"));
+    };
+    var start = new URLSearchParams(location.search).get("p") || "ice";
+    document.querySelectorAll(".pal button").forEach(function (b) { b.addEventListener("click", function () { set(b.dataset.p); }); });
+    set(["gold", "ours", "plum", "midnight", "ice"].indexOf(start) >= 0 ? start : "ice");
+  })();
+</script>
+<script src="/kit/theme-toggle.js" defer></script>
+</body>
+</html>

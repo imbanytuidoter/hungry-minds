@@ -84,8 +84,8 @@ export default function RadioPanel() {
   return (
     <section className="glass hm-bottom-l" style={{ borderRadius: 24, padding: "14px 18px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
       <audio ref={audio} preload="none" onPlaying={() => setState("live")} onWaiting={() => setState("loading")} onError={() => audio.current?.getAttribute("src") && setState("error")} />
-      <button onClick={toggle} aria-label={playing ? "Pause radio" : "Play radio"} style={{ width: 48, height: 48, borderRadius: "50%", border: "1.5px solid rgba(255,255,255,.9)", background: "rgba(255,255,255,.6)", flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="#C2457E" aria-hidden>
+      <button onClick={toggle} aria-label={playing ? "Pause radio" : "Play radio"} style={{ width: 48, height: 48, borderRadius: "50%", border: "1.5px solid color-mix(in srgb, var(--surface) 90%, transparent)", background: "color-mix(in srgb, var(--surface) 60%, transparent)", flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--accent-strong)" aria-hidden>
           <path d={playing ? "M7 5h4v14H7zM13 5h4v14h-4z" : "M8 5l11 7-11 7z"} />
         </svg>
       </button>
@@ -114,7 +114,7 @@ export default function RadioPanel() {
           </option>
         ))}
       </select>
-      <input type="range" min={0} max={1} step={0.05} value={volume} onChange={(e) => setVolume(Number(e.target.value))} aria-label="Volume" style={{ width: 80, accentColor: "#FF6FA3" }} />
+      <input type="range" min={0} max={1} step={0.05} value={volume} onChange={(e) => setVolume(Number(e.target.value))} aria-label="Volume" style={{ width: 80, accentColor: "var(--accent)" }} />
       </div>
     </section>
   );

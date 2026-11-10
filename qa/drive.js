@@ -9,8 +9,8 @@ const path = require("path");
 const [, , stepsFile, ...args] = process.argv;
 const port = 9300 + Math.floor(Math.random() * 500);
 const chrome = spawn("C:/Program Files/Google/Chrome/Application/chrome.exe", [
-  "--headless=new", `--remote-debugging-port=${port}`, "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
-  `--user-data-dir=${process.env.PROFILE || `${process.env.TEMP}/drive-prof-${port}`}`, "about:blank"], { stdio: "ignore" });
+  "--headless=new", `--remote-debugging-port=${port}`, "--mute-audio", "--autoplay-policy=user-gesture-required", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
+  `--user-data-dir=${process.env.PROFILE || `${process.env.TEMP}/drive-prof-${port}`}`, "about:blank"], { stdio: "ignore", windowsHide: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 (async () => {

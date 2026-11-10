@@ -1,6 +1,6 @@
 "use client";
 
-// Weather in the dome (handoff App.dc.html loadWeather): browser geolocation if allowed,
+// Weather in the dome: browser geolocation if allowed,
 // else IP reverse-geocode, else Kyiv; then Open-Meteo. No keys, all off-chain.
 
 import { useEffect, useState } from "react";

@@ -1,9 +1,7 @@
-// How a Mind looks in the game UI (the glossy design-handoff character).
+// How a Mind looks (the glossy character, the same one the contract draws in glossy.rs).
 //
-// The chain rolls seven trait dials at birth (contract/src/art.rs). The game renders the
-// glossy character instead of the on-chain SVG, so this file maps those dials onto the
-// glossy character's colour / eyes / hat / outfit. A keeper may also pick a cosmetic look
-// at hatch time; that choice lives in this browser only and never touches the chain.
+// The keeper's look (colour / eyes / hat / outfit) is stored on chain (`set_look`). Before
+// one is set, the look comes from the seven trait dials rolled at birth, mapped here.
 
 export type Tone =
   | "pink"
@@ -66,9 +64,8 @@ export const LOOK_NAMES = {
 
 export const NATURES = ["Curious", "Poetic", "Funny", "Gentle", "Night owl", "Brainy", "Chatty", "Calm"];
 
-// The contract's 8 temperaments (traits[0]) mapped to the 8 tones that read closest to
-// the on-chain palettes in lib/live.ts (rose, amber, periwinkle, olive, violet, steel,
-// acid lime, slate).
+// The contract's 8 temperaments (traits[0]) mapped to 8 tones (the same table as
+// glossy::look_from_traits).
 const TEMPERAMENT_TONE: Tone[] = ["pink", "yellow", "sky", "lime", "lilac", "teal", "mint", "midnight"];
 
 /** The look a Mind gets from its on-chain trait dials alone. */

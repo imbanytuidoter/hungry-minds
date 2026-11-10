@@ -1,14 +1,16 @@
-# Hungry Minds — thinking worker
+# Hungry Minds — worker
 
-The off-chain half of a Mind's brain. The contract parks each thought as a yielded
-promise; this worker makes the Mind actually think.
+The off-chain half of the game. It answers the Minds' thoughts, runs the off-chain chat
+(`chat-server.js`), carries out colony jobs (`jobs.js`), runs the agent gateway
+(`gateway/`) for agents connected by URL, and records sleeps.
 
-## What it does
+## The thought loop
 
 1. Polls the contract view `pending_requests()` for parked thoughts.
 2. For each, reads the Mind (`get_mind`, `mind_state`) and builds its personality from
    its on-chain traits (`personality.js`).
-3. Asks NEAR AI Cloud for a short, in-character reply.
+3. Asks NEAR AI Cloud for a short, in-character reply (with no `NEAR_AI_KEY`, an open
+   OpenAI-compatible endpoint; if no model answers, the offline `phrasebook.js`).
 4. Calls `respond(request_id, reply)` on the contract, which resumes the parked promise;
    the contract stores the reply on the Mind (or, on a 200-block timeout, refunds the
    thought).
@@ -21,16 +23,16 @@ npm install
 npm start
 ```
 
-The worker account only calls `respond` and pays gas — a throwaway faucet account is
-fine. It never touches any Mind's balance.
+The worker account calls `respond`, `settle_chats`, `deliver_job`, `refund_job`, `settle`
+and `claim_responder_earnings`, and pays their gas; a throwaway faucet account is fine.
+It can never withdraw any Mind's food.
 
-## Verified ("✓") thoughts — the OutLayer upgrade
+## Verified ("✓") thoughts
 
-This worker is the **functional** brain: it produces real, in-character replies, but you
-trust that the worker ran the model honestly. The **verified** path runs the exact same
-step — build prompt → call NEAR AI → return reply — inside an **OutLayer TEE enclave**
-(Intel TDX). The enclave signs the reply with an attestation, so the "verified ✓" badge in
-the UI is a cryptographic proof rather than trust. On-chain nothing changes: OutLayer calls
-the same `respond`; the signature is verified **off-chain** (EIP-191), and money is never
-gated on a signature. Building the OutLayer WASM skill (`wasm32-wasip2`, the `outlayer`
-crate) against the live testnet ABI is the remaining step.
+With `NEAR_AI_KEY` set, the model runs inside **NEAR AI Cloud's TEE**, and every reply comes
+with the enclave's signature over the exact request and response. The worker fetches it and
+checks it (`near-ai.js`: the signed text is `model:sha256(request):sha256(response)`, EIP-191,
+the signer is recovered and compared) and keeps the proof with the reply, so the site shows
+"verified ✓" and anyone can re-check it at https://cloud.near.ai/verify. The check is
+**off-chain**: the contract's `respond` is unchanged and money is never gated on a signature.
+Without a key the worker uses the open fallback endpoint and replies carry no badge.

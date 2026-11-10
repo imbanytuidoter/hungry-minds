@@ -1,7 +1,5 @@
 // The offline brain, in the browser. Same phrasebook as worker/phrasebook.js (keep the two
-// in step). `respond` lets a keeper answer their own Mind, so when no worker answers a parked
-// thought in time, the player's own burner account can resume it with one of these lines
-// instead of letting the thought time out. No model is called.
+// in step). Used when the demo's /api/brain model is unavailable. No model is called.
 
 const PASSION = [
   "the stars and deep space",

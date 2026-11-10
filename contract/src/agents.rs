@@ -31,7 +31,7 @@ pub const MAX_INPUT_SCHEMA: usize = 1_500;
 pub const DEFAULT_SLA_SECS: u32 = 600;
 const MIN_SLA_SECS: u32 = 60;
 const MAX_SLA_SECS: u32 = 7 * 86_400;
-/// How many of a buyer's jobs are remembered for "My orders" (oldest drop off the list).
+/// Most jobs a buyer may hold not yet closed ("My orders"); a further order is refused until one is closed.
 const MAX_BUYER_JOBS: usize = 50;
 const SEC: u64 = 1_000_000_000;
 /// Jobs that may wait for delivery at once (bounds the open list a view or call reads).
@@ -39,6 +39,16 @@ const MAX_OPEN_JOBS: usize = 1_000;
 
 fn agents() -> LookupMap<u64, AgentInfo> {
     LookupMap::new(b"a".to_vec())
+}
+/// On a change of owner: drop the Mind's agent unless `platform` says it runs on the platform.
+pub(crate) fn unplug_personal_agent(mind_id: u64, platform: impl Fn(&AccountId) -> bool) {
+    let mut a = agents();
+    if let Some(info) = a.get(&mind_id) {
+        if !platform(&info.account) {
+            env::log_str(&format!("agent_cleared mind={mind_id} reason=sold"));
+            a.remove(&mind_id);
+        }
+    }
 }
 fn jobs() -> LookupMap<u64, Job> {
     LookupMap::new(b"j".to_vec())
@@ -152,7 +162,7 @@ pub struct Job {
     pub escrow: NearToken,
     /// Storage deposit, returned on `close_job`.
     pub deposit: NearToken,
-    /// Who kept the Mind when the job was paid: the 20% is theirs even if she changes hands.
+    /// Who kept the Mind when the job was ordered (a record only: the 90% goes to whoever owns her at delivery).
     pub keeper: AccountId,
     pub created: u64,
     pub deadline: u64,
@@ -349,13 +359,19 @@ impl Contract {
         self.settle_metabolism(s.mind_id, now);
         let mind = self.minds.get(&s.mind_id).unwrap_or_else(|| env::panic_str("no such Mind"));
         require!(!mind.ghost, "a ghost takes no jobs");
-        // Work costs her food, and only her owner feeds her: a hungry, sleeping Mind takes no jobs.
-        require!(mind.asleep_since == 0 && mind.balance.as_yoctonear() >= self.thought_cost, "she is asleep: her owner has to feed her first");
+        // Work costs her food: a hungry, sleeping Mind takes no jobs until someone feeds her.
+        require!(mind.asleep_since == 0 && mind.balance.as_yoctonear() >= self.thought_cost, "she is asleep: feed her to wake her (anyone can)");
         let keeper = mind.owner.clone();
         let price = s.price.as_yoctonear().max(self.guest_min_price);
         let paid = env::attached_deposit().as_yoctonear();
         require!(paid >= price + JOB_DEPOSIT, format!("attach the price plus {} yoctoNEAR storage deposit", JOB_DEPOSIT));
         let buyer = env::predecessor_account_id();
+        // A buyer's list holds only jobs not yet closed (close_job removes them); a full list (50)
+        // refuses new orders, so no 0.03 NEAR deposit is ever stranded.
+        require!(
+            buyer_jobs().get(&buyer).map_or(0, |l| l.len()) < MAX_BUYER_JOBS,
+            "you have 50 orders not yet closed: close finished ones in My orders first"
+        );
         if paid > price + JOB_DEPOSIT {
             let _ = Promise::new(buyer.clone()).transfer(NearToken::from_yoctonear(paid - price - JOB_DEPOSIT));
         }
@@ -387,9 +403,6 @@ impl Contract {
         let mut mine = buyer_jobs();
         let mut list = mine.get(&buyer).cloned().unwrap_or_default();
         list.push(id);
-        if list.len() > MAX_BUYER_JOBS {
-            list.remove(0);
-        }
         mine.insert(buyer.clone(), list);
         env::log_str(&format!("job_ordered id={id} service={service_id} mind={} buyer={buyer} price={price}", s.mind_id));
         id
@@ -423,7 +436,7 @@ impl Contract {
         // and the buyer takes a refund at the deadline.
         require!(
             self.minds.get_mut(&job.mind_id).unwrap().spend_one_thought(now, cost),
-            "she is asleep: her owner has to feed her first"
+            "she is asleep: feed her to wake her (anyone can)"
         );
         self.pay_deliverer(job.mind_id, cost, &caller, is_agent);
         self.credit_guest_payment(job.mind_id, escrow, now, Some(&job.keeper));
@@ -498,7 +511,7 @@ impl Contract {
         jobs().get(&job_id).cloned()
     }
 
-    /// A buyer's recent jobs, newest first.
+    /// A buyer's jobs not yet closed, newest first.
     pub fn jobs_of(&self, account_id: AccountId) -> Vec<Job> {
         let all = jobs();
         buyer_jobs().get(&account_id).cloned().unwrap_or_default().into_iter().rev().filter_map(|i| all.get(&i).cloned()).collect()
@@ -592,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "her owner has to feed her first")]
+    #[should_panic(expected = "feed her to wake her")]
     fn a_sleeping_mind_takes_no_jobs() {
         let mut c = shop();
         c.minds.get_mut(&0).unwrap().asleep_since = T0;
@@ -654,6 +667,37 @@ mod tests {
     }
 
     #[test]
+    fn a_full_order_list_is_refused_until_one_is_closed() {
+        let mut c = shop();
+        let first = order(&mut c, T0);
+        for _ in 1..MAX_BUYER_JOBS {
+            order(&mut c, T0);
+        }
+        assert_eq!(c.jobs_of("bob.near".parse().unwrap()).len(), MAX_BUYER_JOBS);
+        // the oldest job (and its 0.03 NEAR deposit) is still on the list (a 51st order is
+        // refused: the_fifty_first_open_order_is_refused)
+        assert!(c.jobs_of("bob.near".parse().unwrap()).iter().any(|j| j.id == first));
+        // close one finished job and there is room again
+        at("anyone.near", 0, T0 + (DEFAULT_SLA_SECS as u64 + 1) * SEC);
+        c.refund_job(first);
+        at("bob.near", 0, T0 + (DEFAULT_SLA_SECS as u64 + 2) * SEC);
+        c.close_job(first);
+        let next = order(&mut c, T0 + (DEFAULT_SLA_SECS as u64 + 3) * SEC);
+        assert_eq!(c.jobs_of("bob.near".parse().unwrap()).len(), MAX_BUYER_JOBS);
+        assert!(c.get_job(next).is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "close finished ones in My orders first")]
+    fn the_fifty_first_open_order_is_refused() {
+        let mut c = shop();
+        for _ in 0..MAX_BUYER_JOBS {
+            order(&mut c, T0);
+        }
+        order(&mut c, T0);
+    }
+
+    #[test]
     fn the_buyer_rates_once() {
         let mut c = shop();
         let id = order(&mut c, T0);
@@ -705,15 +749,27 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_goes_with_the_nft_and_the_new_owner_controls_it() {
+    fn a_platform_agent_goes_with_the_nft_and_the_new_owner_controls_it() {
+        let mut c = shop();
+        // the official / by-URL agent gateway is an approved responder (worker.near in shop())
+        at("alice.near", 10 * MILLI, T0);
+        c.set_agent(0, Some("worker.near".parse().unwrap()), None);
+        at("alice.near", 1, T0);
+        c.nft_transfer("bob.near".parse().unwrap(), "0".into(), None, None);
+        assert_eq!(c.agent_of(0).unwrap().account.as_str(), "worker.near");
+        at("bob.near", 10 * MILLI, T0);
+        c.set_agent(0, None, None); // the new owner may unplug it
+        assert!(c.agent_of(0).is_none());
+    }
+
+    #[test]
+    fn the_sellers_own_agent_is_unplugged_at_the_sale() {
         let mut c = shop();
         at("alice.near", 10 * MILLI, T0);
         c.set_agent(0, Some("bot.alice.near".parse().unwrap()), None);
         at("alice.near", 1, T0);
         c.nft_transfer("bob.near".parse().unwrap(), "0".into(), None, None);
-        assert_eq!(c.agent_of(0).unwrap().account.as_str(), "bot.alice.near");
-        at("bob.near", 10 * MILLI, T0);
-        c.set_agent(0, None, None); // the new owner may unplug it
+        // otherwise bot.alice.near would keep delivering her jobs and earning from her food
         assert!(c.agent_of(0).is_none());
     }
 
@@ -721,18 +777,30 @@ mod tests {
     fn after_a_sale_the_new_owner_earns_from_the_agent() {
         let mut c = shop();
         at("alice.near", 10 * MILLI, T0);
-        c.set_agent(0, Some("bot.alice.near".parse().unwrap()), None);
+        c.set_agent(0, Some("worker.near".parse().unwrap()), None);
         at("alice.near", 1, T0);
         c.nft_transfer("bob.near".parse().unwrap(), "0".into(), None, None);
         let id = {
             at("carol.near", 30 * MILLI + JOB_DEPOSIT, T0);
             c.order_job(0, "check carol.near".into())
         };
-        at("bot.alice.near", 0, T0 + SEC);
+        at("worker.near", 0, T0 + SEC);
         c.deliver_job(id, "done".into());
         let m = c.get_mind(0).unwrap();
         assert_eq!(m.owner.as_str(), "bob.near");
         assert_eq!(m.owner_unclaimed.as_yoctonear(), 27 * MILLI); // 90% to the new owner
+    }
+
+    #[test]
+    fn a_job_ordered_before_the_sale_pays_the_buyer_once_delivered() {
+        let mut c = shop();
+        let id = order(&mut c, T0); // carol... bob orders while alice owns her
+        at("alice.near", 1, T0);
+        c.nft_transfer("dave.near".parse().unwrap(), "0".into(), None, None);
+        at("worker.near", 0, T0 + SEC);
+        c.deliver_job(id, "done".into());
+        // the seller keeps only the sale price: the 90% is the new owner's
+        assert_eq!(c.get_mind(0).unwrap().owner_unclaimed.as_yoctonear(), 27 * MILLI);
     }
 
     #[test]

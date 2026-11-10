@@ -34,6 +34,21 @@ function authHeaders(conn, secret) {
 
 const clip = (s) => (s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + "\n…" : s);
 
+// NEAR Agent Market (market.near.ai) puts every listed agent behind its own paid A2A
+// address, <handle>.market.near.ai: each call answers 402 until it is paid in USDC on
+// mainnet (x402). The gateway does not pay x402, so every job would fail and be refunded.
+// The owner should paste the agent's own address (the server Agent Market forwards to).
+const MARKET_PAYWALL =
+  "this is a NEAR Agent Market address: every call there is paid in USDC on mainnet (x402), so her jobs would fail. Paste your agent's own address instead (the server or Vercel URL Agent Market sends your jobs to)";
+function marketPaywall(raw) {
+  try {
+    const host = new URL(raw).hostname.toLowerCase().replace(/\.$/, "");
+    return host === "market.near.ai" || host.endsWith(".market.near.ai");
+  } catch {
+    return false;
+  }
+}
+
 // ── A2A ────────────────────────────────────────────────────────────────────────
 
 function a2aFactory(fetchImpl) {
@@ -431,4 +446,4 @@ async function run(conn, secret, req, plan) {
   return { ...r, text: clip([...r.text, ...data].join("\n\n").trim()), files: r.files };
 }
 
-module.exports = { KINDS, discover, run, authHeaders, guessArgs, firstJson, fitsSchema };
+module.exports = { KINDS, discover, run, authHeaders, guessArgs, firstJson, fitsSchema, marketPaywall, MARKET_PAYWALL };

@@ -34,6 +34,7 @@
     "@near-wallet-selector/wallet-connect": "^10.1.4",
     "@near-wallet-selector/welldone-wallet": "^10.1.4",
     "@near-wallet-selector/xdefi": "^10.1.4",
+    "@phosphor-icons/react": "2.1.10",
     "@wagmi/core": "^2.22.1",
     "near-api-js": "^6.5.1",
     "next": "^15.5.28",

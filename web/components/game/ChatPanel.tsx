@@ -115,15 +115,15 @@ export default function ChatPanel({ mind, service, clearService }: { mind: MindR
         <span style={{ fontWeight: 600, fontSize: 22 }}>
           Chat with {mind.name}
           {agent && (
-            <span style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "#3D5BA9" }}>
-              She talks herself · her agent {agent.name} does the tasks{agent.online ? "" : " (offline right now)"}
+            <span style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--info)" }}>
+              {mind.name} chats herself; tasks and orders go to her agent {agent.name}{agent.online ? "" : " (offline right now)"}
             </span>
           )}
         </span>
         <span style={{ fontSize: 12.5, color: "var(--muted)" }}>{note}</span>
       </div>
       {service && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 16, background: "rgba(255,255,255,.7)", fontSize: 13.5 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 16, background: "color-mix(in srgb, var(--surface) 70%, transparent)", fontSize: 13.5 }}>
           <span style={{ flex: 1 }}>
             Ordering <b>{service.title}</b> · {service.price.toFixed(2)} NEAR / {service.unit}
           </span>
@@ -133,15 +133,15 @@ export default function ChatPanel({ mind, service, clearService }: { mind: MindR
         </div>
       )}
       <div ref={list} style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column", gap: 10, maxHeight: 380, minHeight: 160 }} aria-live="polite">
-        {mind.msgs.length === 0 && <span className="sub">Say hi. {own ? "She'll answer with her own voice." : "Your message pays for her reply."}</span>}
+        {mind.msgs.length === 0 && <span className="sub">Say hi. {own ? "She'll answer with her own voice." : "Your message pays her keeper; her reply costs her a little food."}</span>}
         {mind.msgs.map((m, i) => (
           <div
             key={i}
             style={{
               alignSelf: m.who === "me" ? "flex-end" : "flex-start",
               maxWidth: "85%",
-              background: m.who === "me" ? "linear-gradient(180deg,#FFA3C6,#FF6FA3)" : "#fff",
-              color: m.who === "me" ? "#fff" : "var(--ink)",
+              background: m.who === "me" ? "var(--accent)" : "var(--surface)",
+              color: m.who === "me" ? "var(--on-accent)" : "var(--ink)",
               borderRadius: m.who === "me" ? "18px 18px 6px 18px" : "18px 18px 18px 6px",
               padding: "10px 14px",
               fontSize: 15,
@@ -151,7 +151,7 @@ export default function ChatPanel({ mind, service, clearService }: { mind: MindR
             }}
           >
             <MsgText t={m.t} />
-            {m.via ? <span style={{ display: "block", fontSize: 11, fontWeight: 600, color: "#3D5BA9", marginTop: 6 }}>via her agent {m.via}</span> : null}
+            {m.via ? <span style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--info)", marginTop: 6 }}>via her agent {m.via}</span> : null}
             {m.paid ? <span style={{ display: "block", fontSize: 11, opacity: 0.8, marginTop: 2 }}>paid {m.paid.toFixed(2)} NEAR</span> : null}
             {m.proof && (
               <a
@@ -171,7 +171,7 @@ signature ${m.proof.signature}` : "NEAR AI wrote this reply, but its signature w
           </div>
         ))}
         {thinking && (
-          <div className="hm-dots" style={{ alignSelf: "flex-start", background: "#fff", borderRadius: "18px 18px 18px 6px", padding: "10px 16px", fontSize: 20, lineHeight: 1 }} aria-label="thinking">
+          <div className="hm-dots" style={{ alignSelf: "flex-start", background: "var(--surface)", borderRadius: "18px 18px 18px 6px", padding: "10px 16px", fontSize: 20, lineHeight: 1 }} aria-label="thinking">
             <span>•</span>
             <span>•</span>
             <span>•</span>
@@ -179,13 +179,13 @@ signature ${m.proof.signature}` : "NEAR AI wrote this reply, but its signature w
         )}
       </div>
       {g.mode === "live" && !g.account && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 12, borderRadius: 16, background: "rgba(255,255,255,.7)" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 12, borderRadius: 16, background: "color-mix(in srgb, var(--surface) 70%, transparent)" }}>
           <span className="sub">To pay {mind.name}, connect {WALLET_KIND}. You don&apos;t need a Mind of your own.</span>
           <ConnectButtons />
         </div>
       )}
       {showPacks && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 14px", borderRadius: 16, background: "rgba(255,255,255,.7)", fontSize: 13.5 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 14px", borderRadius: 16, background: "color-mix(in srgb, var(--surface) 70%, transparent)", fontSize: 13.5 }}>
           <span style={{ flex: 1, minWidth: 180 }}>{left === 0 ? "Buy chat credits to talk to her." : "Running low on chat credits."} One approval, then no wallet per message.</span>
           {packs.map((p) => (
             <button key={p.n} className="btn-ghost pill" disabled={g.busy} onClick={() => void g.buyCredits(p.near).then((ok) => ok && loadChatLeft(mind.id))}>
@@ -195,7 +195,7 @@ signature ${m.proof.signature}` : "NEAR AI wrote this reply, but its signature w
         </div>
       )}
       {schema && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 8, padding: "10px 12px", borderRadius: 16, background: "rgba(255,255,255,.7)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 8, padding: "10px 12px", borderRadius: 16, background: "color-mix(in srgb, var(--surface) 70%, transparent)" }}>
           {Object.entries(schema.properties).map(([k, p]) => (
             <label key={k} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12.5, color: "var(--muted-2)" }}>
               <span>
@@ -260,7 +260,7 @@ signature ${m.proof.signature}` : "NEAR AI wrote this reply, but its signature w
           ? "Replies come from an AI model in her character (demo world: nothing is written on chain)."
           : service
             ? `An order is a job: the contract holds your ${price.toFixed(2)} NEAR until she delivers${service.sla ? ` (due in ${service.sla})` : ""} and gives it back if she doesn't. It also holds a ${JOB_DEPOSIT_NEAR} NEAR storage deposit you get back when you close the order in Shop → My orders.`
-            : "No transaction per message and no wallet popup: your wallet signs in to chat once a day, and what you use is settled on chain in batches from her food (or your chat credits). The free model tier allows about one reply per 45 s, so a busy moment can take a little longer."}
+            : "No wallet popup per message: your wallet signs in to chat once a day, and what you use is settled on chain in batches from her food (or your chat credits)."}
       </span>
     </section>
   );

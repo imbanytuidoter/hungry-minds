@@ -5,7 +5,7 @@
 // as a no-op provider so the site needs no wallet. The exposed `signer` is exactly what
 // lib/chain's write helpers expect, so UI code calls chain.feed(signer, …) without caring
 // which wallet is behind it. This is functional plumbing — the picker is Wallet Selector's
-// own modal; styling is the designer's to theme.
+// own modal.
 
 import {
   createContext,
@@ -31,6 +31,10 @@ import { chatSession } from "@/lib/chatClient";
 import { Account, KeyPairSigner, providers } from "near-api-js";
 import { Buffer } from "buffer";
 import { NETWORK, CONTRACT_ID, RPC_URLS, WALLET_RPC_URLS, isLive, type Signer } from "@/lib/chain";
+
+const CANT_SIGN = "This wallet can't sign a message, so chat and agents won't work with it. Try Meteor, Intear or HOT.";
+/** A wallet that lists signMessage but refuses it (Math Wallet throws "Method not supported"). */
+const cannotSign = (e: unknown) => /not supported/i.test(String((e as Error)?.message ?? e));
 
 type Ctx = {
   /** True once the selector has initialised (live mode only). */
@@ -189,6 +193,15 @@ export default function WalletProvider({
     try {
       await chatSession(walletAccount, sign, true);
     } catch (e) {
+      // Some wallets list signMessage but refuse it ("Method not supported by Math Wallet"):
+      // treat them like a wallet without it, reconnect through the wallet's own approval
+      if (!signed && cannotSign(e)) {
+        await w.signOut().catch(() => {});
+        setAccountId(null);
+        setUnlocked(true);
+        modal?.show();
+        return;
+      }
       // the wallet said no (or signed as someone else): stay signed out
       if (!signed || /signed as/.test(String((e as Error)?.message))) throw e;
       // signed, but the chat server is down: you're in; chat will ask again when it's back
@@ -233,8 +246,10 @@ export default function WalletProvider({
     if (!selector || !accountId) return null;
     return async (message, nonce, recipient) => {
       const w = await selector.wallet();
-      if (!("signMessage" in w) || !w.signMessage) throw new Error("This wallet can't sign a message. Try Meteor, Intear or HOT.");
-      const s = await w.signMessage({ message, nonce: Buffer.from(nonce), recipient });
+      if (!("signMessage" in w) || !w.signMessage) throw new Error(CANT_SIGN);
+      const s = await w.signMessage({ message, nonce: Buffer.from(nonce), recipient }).catch((e: unknown) => {
+        throw cannotSign(e) ? new Error(CANT_SIGN) : e;
+      });
       if (!s) throw new Error("The wallet didn't return a signature.");
       return { accountId: s.accountId, publicKey: s.publicKey, signature: s.signature };
     };
