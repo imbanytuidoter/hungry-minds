@@ -44,6 +44,8 @@ pub(crate) fn wrap_account() -> AccountId {
 }
 const GAS_FOR_NEAR_WITHDRAW: Gas = Gas::from_tgas(10);
 const GAS_FOR_WNEAR_ORDER: Gas = Gas::from_tgas(30);
+/// Left for ft_on_transfer itself to finish after scheduling the two calls above.
+const GAS_FOR_WNEAR_MARGIN: Gas = Gas::from_tgas(5);
 
 /// What `ft_transfer_call`'s `msg` carries for a job.
 #[derive(near_sdk::serde::Deserialize)]
@@ -62,6 +64,10 @@ trait WNear {
 
 fn agents() -> LookupMap<u64, AgentInfo> {
     LookupMap::new(b"a".to_vec())
+}
+/// The account of the Mind's agent, if one is plugged in.
+pub(crate) fn agent_account(mind_id: u64) -> Option<AccountId> {
+    agents().get(&mind_id).map(|i| i.account.clone())
 }
 /// On a change of owner: drop the Mind's agent unless `platform` says it runs on the platform.
 pub(crate) fn unplug_personal_agent(mind_id: u64, platform: impl Fn(&AccountId) -> bool) {
@@ -479,37 +485,50 @@ impl Contract {
                 return PromiseOrValue::Value(amount);
             }
         };
-        if let Err(e) = self.order_checks(&sender_id, o.service_id, &o.input, amount.0) {
-            env::log_str(&format!("job_order_refused buyer={sender_id} reason={e}"));
+        let price = match self.order_checks(&sender_id, o.service_id, &o.input, amount.0) {
+            Ok((_, price)) => price,
+            Err(e) => {
+                env::log_str(&format!("job_order_refused buyer={sender_id} reason={e}"));
+                return PromiseOrValue::Value(amount);
+            }
+        };
+        // Refuse now, while the tokens can simply go back, if the unwrap and the order could
+        // not both get their gas.
+        if env::prepaid_gas().as_gas() < env::used_gas().as_gas() + GAS_FOR_NEAR_WITHDRAW.as_gas() + GAS_FOR_WNEAR_ORDER.as_gas() + GAS_FOR_WNEAR_MARGIN.as_gas() {
+            env::log_str(&format!("job_order_refused buyer={sender_id} reason=attach more gas to ft_transfer_call (150 Tgas)"));
             return PromiseOrValue::Value(amount);
         }
+        // Unwrap only what the order costs; the token contract gives the rest back as wNEAR.
+        let need = price + JOB_DEPOSIT;
+        let excess = amount.0 - need;
         ext_wnear::ext(wrap_account())
             .with_attached_deposit(NearToken::from_yoctonear(1))
             .with_static_gas(GAS_FOR_NEAR_WITHDRAW)
-            .near_withdraw(amount)
-            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_WNEAR_ORDER).on_wnear_unwrapped(sender_id, o.service_id, o.input, amount))
+            .near_withdraw(U128(need))
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_FOR_WNEAR_ORDER).on_wnear_unwrapped(sender_id, o.service_id, o.input, U128(need), U128(excess)))
             .into()
     }
 
-    /// After the unwrap: place the order (the checks run again, state may have moved). The
-    /// value returned is the wNEAR the token contract should give back: all of it if the unwrap
-    /// failed, none once it is NEAR here (a refused order is then refunded in NEAR).
+    /// After the unwrap of `need` (price + deposit): place the order (the checks run again,
+    /// state may have moved). The value returned is the wNEAR the token contract gives back:
+    /// everything if the unwrap failed, else the `excess` that was never unwrapped. A refused
+    /// order is refunded its `need` in NEAR (it is NEAR here by now).
     #[private]
-    pub fn on_wnear_unwrapped(&mut self, buyer: AccountId, service_id: u64, input: String, amount: U128, #[callback_result] unwrapped: Result<(), PromiseError>) -> U128 {
+    pub fn on_wnear_unwrapped(&mut self, buyer: AccountId, service_id: u64, input: String, need: U128, excess: U128, #[callback_result] unwrapped: Result<(), PromiseError>) -> U128 {
         if unwrapped.is_err() {
             env::log_str(&format!("job_order_refused buyer={buyer} reason=the wNEAR could not be unwrapped"));
-            return amount;
+            return U128(need.0 + excess.0);
         }
-        match self.order_checks(&buyer, service_id, &input, amount.0) {
+        match self.order_checks(&buyer, service_id, &input, need.0) {
             Ok((s, price)) => {
-                self.place_order(buyer, s, input, amount.0, price);
+                self.place_order(buyer, s, input, need.0, price);
             }
             Err(e) => {
                 env::log_str(&format!("job_order_refused buyer={buyer} reason={e}"));
-                let _ = Promise::new(buyer).transfer(NearToken::from_yoctonear(amount.0));
+                let _ = Promise::new(buyer).transfer(NearToken::from_yoctonear(need.0));
             }
         }
-        U128(0)
+        excess
     }
 
     /// The Mind's agent (or, for a Mind with no agent, an approved worker) delivers a job's
@@ -822,7 +841,7 @@ mod tests {
             Default::default(),
             vec![if ok { near_sdk::PromiseResult::Successful(vec![]) } else { near_sdk::PromiseResult::Failed }]
         );
-        c.on_wnear_unwrapped("carol.near".parse().unwrap(), 0, "check carol.near".into(), U128(amount), if ok { Ok(()) } else { Err(PromiseError::Failed) }).0
+        c.on_wnear_unwrapped("carol.near".parse().unwrap(), 0, "check carol.near".into(), U128(amount), U128(0), if ok { Ok(()) } else { Err(PromiseError::Failed) }).0
     }
 
     #[test]
@@ -856,6 +875,42 @@ mod tests {
         assert_eq!(j.buyer.as_str(), "carol.near");
         assert_eq!(j.escrow.as_yoctonear(), 30 * MILLI);
         assert_eq!(j.status, JobStatus::Open);
+    }
+
+    #[test]
+    fn the_receivers_own_agent_survives_the_resolve() {
+        let mut c = shop();
+        at("alice.near", 10 * MILLI, T0);
+        c.set_agent(0, Some("bot.alice.near".parse().unwrap()), None);
+        at("alice.near", 1, T0);
+        let _ = c.nft_transfer_call("market.near".parse().unwrap(), "0".into(), None, None, "".into());
+        at("market.near", 10 * MILLI, T0); // the new owner plugs in its own agent before the resolve
+        c.set_agent(0, Some("bot.market.near".parse().unwrap()), None);
+        assert!(resolve(&mut c, false));
+        assert_eq!(c.agent_of(0).unwrap().account.as_str(), "bot.market.near");
+    }
+
+    #[test]
+    fn too_little_gas_refuses_before_the_unwrap() {
+        let mut c = shop();
+        testing_env!(VMContextBuilder::new().predecessor_account_id("wrap.near".parse().unwrap()).current_account_id("hm.near".parse().unwrap()).block_timestamp(T0).prepaid_gas(near_sdk::Gas::from_tgas(20)).build());
+        assert_eq!(returned(c.ft_on_transfer("carol.near".parse().unwrap(), U128(30 * MILLI + JOB_DEPOSIT), ORDER.into())), Some(30 * MILLI + JOB_DEPOSIT));
+    }
+
+    #[test]
+    fn wnear_above_the_price_goes_back_as_wnear() {
+        let mut c = shop();
+        // the callback is told what was unwrapped (need) and what was not (excess): it returns the excess
+        testing_env!(
+            VMContextBuilder::new().predecessor_account_id("hm.near".parse().unwrap()).current_account_id("hm.near".parse().unwrap()).block_timestamp(T0).build(),
+            near_sdk::test_vm_config(),
+            near_sdk::RuntimeFeesConfig::test(),
+            Default::default(),
+            vec![near_sdk::PromiseResult::Successful(vec![])]
+        );
+        let back = c.on_wnear_unwrapped("carol.near".parse().unwrap(), 0, "check carol.near".into(), U128(30 * MILLI + JOB_DEPOSIT), U128(7 * MILLI), Ok(()));
+        assert_eq!(back.0, 7 * MILLI);
+        assert_eq!(c.get_job(0).unwrap().escrow.as_yoctonear(), 30 * MILLI);
     }
 
     #[test]
@@ -960,7 +1015,7 @@ mod tests {
             Default::default(),
             vec![near_sdk::PromiseResult::Successful(if returned { b"true".to_vec() } else { b"false".to_vec() })]
         );
-        c.nft_resolve_transfer("alice.near".parse().unwrap(), "market.near".parse().unwrap(), "0".into(), Default::default())
+        c.nft_resolve_transfer("alice.near".parse().unwrap(), "market.near".parse().unwrap(), "0".into(), Default::default(), Some("bot.alice.near".parse().unwrap()))
     }
 
     #[test]

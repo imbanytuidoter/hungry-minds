@@ -44,6 +44,11 @@ test("a correct wNEAR ft_transfer_call delegate passes, names the buyer, and its
   assert.equal(p.amount, AMOUNT);
   assert.equal(signatureOk(p.signed), true);
   assert.equal(signatureOk(check(header({ sign: false })).signed), false, "a zero signature is caught before the relay");
+  // the replay key is the delegate (sender, key, nonce), not the header's wording
+  const h = header();
+  const reworded = Buffer.from(JSON.stringify(JSON.parse(Buffer.from(h, "base64").toString()), null, 2)).toString("base64");
+  assert.notEqual(reworded, h);
+  assert.equal(check(reworded).dedupe, check(h).dedupe);
 });
 
 test("anything else is refused before the relay", () => {
@@ -56,6 +61,9 @@ test("anything else is refused before the relay", () => {
   assert.throws(() => check(header({ args: args({ msg: JSON.stringify({ service_id: 8, input: "hi" }) }) })), /different service/);
   assert.throws(() => check(header(), "something else"), /input must be the message text/);
   assert.throws(() => check(header({ args: args({ msg: "nope" }) })), /must be JSON/);
+  // what JSON.parse accepts but the chain's serde would refuse, at the relayer's cost
+  assert.throws(() => check(header({ args: args({ memo: 123 }) })), /args must be exactly/);
+  assert.throws(() => check(header({ args: args({ msg: '{"service_id":7.0,"input":"hi"}' }) })), /args must be exactly/);
   assert.throws(() => check(header({ actions: [transactions.functionCall("ft_transfer_call", args(), 200_000_000_000_000n, 1n), transactions.transfer(1n)] })), /exactly one function call/);
   assert.throws(() => check(header({ accepted: { ...row, amount: "1" } })), /does not match this offer/);
   assert.throws(() => check(header({ accepted: { ...row, asset: "usdc.testnet" } })), /does not match this offer/);

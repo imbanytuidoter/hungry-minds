@@ -14,7 +14,8 @@
 // tokens and not with an attached deposit). The contract (`ft_on_transfer`, agents.rs) checks
 // the order, unwraps the wNEAR and places the same escrowed job for the buyer: only her agent
 // (or the colony worker) can deliver, delivery pays 90% to her owner and 10% to the protocol,
-// and past the deadline the buyer is refunded. A refused order gives the buyer's tokens back.
+// and past the deadline the buyer is refunded. A refused order gives the buyer's tokens back
+// (in NEAR if it is refused after the unwrap); wNEAR above the price is never unwrapped.
 //
 // Before relaying, the worker checks that the delegate is exactly that one call for the row
 // the buyer accepted, that it is validly signed by a full-access key of the buyer's account
@@ -85,7 +86,14 @@ function checkPayment(headerValue, { contractId, network, text, rows }) {
   if (String(args.amount) !== row.amount) throw new Error(`send exactly ${row.amount} (price + 0.03 NEAR storage deposit, in wNEAR)`);
   if (order?.service_id !== row.extra.service_id) throw new Error("msg is for a different service than the accepted row");
   if (typeof order.input !== "string" || order.input !== text) throw new Error("msg input must be the message text");
-  return { signed, sender: d.senderId, serviceId: order.service_id, input: order.input, amount: row.amount };
+  // The chain parses these bytes with serde, stricter than JSON.parse (duplicate keys, extra
+  // fields, 18.0 for 18, bad UTF-8): accept only the exact canonical bytes, so nothing that
+  // passes here can fail there at the relayer's cost.
+  const canonical = JSON.stringify({ receiver_id: contractId, amount: row.amount, msg: JSON.stringify({ service_id: row.extra.service_id, input: text }) });
+  if (!Buffer.from(fc.args).equals(Buffer.from(canonical, "utf8"))) throw new Error(`ft_transfer_call args must be exactly ${canonical}`);
+  if (!d.publicKey?.ed25519Key) throw new Error("only ed25519 keys are supported");
+  const dedupe = `${d.senderId}:${keyOf(d).toString()}:${d.nonce}`;
+  return { signed, sender: d.senderId, serviceId: order.service_id, input: order.input, amount: row.amount, dedupe };
 }
 
 /** The delegate's public key (ed25519 only), whether decoded from borsh or built in memory. */
@@ -140,7 +148,8 @@ function failureOf(outcome, sender = null) {
 function makeX402({ view, account, contractId, network, secret, gateway = null, publicUrl = "" }) {
   const wrap = wrapOf(network);
   const provider = account.connection.provider;
-  const used = new Set(); // payment headers already relayed (the chain's nonce also refuses a replay)
+  const used = new Set(); // delegates already relayed, as sender:key:nonce (the header's wording doesn't matter)
+  const topNonce = new Map(); // sender:key -> the highest delegate nonce relayed (a lower one would fail on chain)
   const inFlight = new Set(); // one paid call per buyer at a time
   const relays = []; // timestamps of the last minute's relays
   const tagOf = (jobId) => crypto.createHmac("sha256", secret).update(`x402:${contractId}:${jobId}`).digest("hex").slice(0, 24);
@@ -173,19 +182,41 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     }
   }
   void ensureRegistered();
+  let lastRegTry = Date.now();
+  /** Registered? If not, try again at most every 5 minutes (a startup RPC hiccup shouldn't close the door). */
+  async function registeredNow() {
+    if (await isRegistered()) return true;
+    if (Date.now() - lastRegTry < 300_000) return false;
+    lastRegTry = Date.now();
+    return ensureRegistered();
+  }
+
+  // The offer is read from five views; keep it a few seconds so a burst of unpaid calls (or a
+  // card being polled) doesn't hammer the RPC the worker also needs for its own work.
+  const offers = new Map();
+  let paramsCache = { at: 0, v: null };
+  async function offer(mindId) {
+    const hit = offers.get(mindId);
+    if (hit && Date.now() - hit.at < 5_000) return hit.v;
+    const v = await readOffer(mindId);
+    offers.set(mindId, { at: Date.now(), v });
+    if (offers.size > 500) offers.delete(offers.keys().next().value);
+    return v;
+  }
 
   /** The rows for the services she can take right now (live, awake, agent present if needed). */
-  async function offer(mindId) {
+  async function readOffer(mindId) {
     const mind = await view("get_mind", { id: mindId }).catch(() => null);
     if (!mind) return null;
     const state = await view("live_state", { id: mindId }).catch(() => null);
     const awake = !mind.ghost && state !== "asleep" && state !== "ghost";
-    const params = await view("params", {}).catch(() => null);
-    const min = BigInt(params?.guest_min_price || "0");
+    if (Date.now() - paramsCache.at > 60_000) paramsCache = { at: Date.now(), v: await view("params", {}).catch(() => null) };
+    const min = BigInt(paramsCache.v?.guest_min_price || "0");
     const hasAgent = !!(await view("agent_of", { mind_id: mindId }).catch(() => null));
     const all = (await view("services_for_mind", { mind_id: mindId }).catch(() => [])).filter((s) => s.live);
     const services = awake ? all.filter((s) => s.category >= AGENT_ONLY_CATEGORIES || hasAgent) : [];
-    const rows = services.map((s) => {
+    const schemas = services.length ? await view("input_schemas", { ids: services.map((s) => s.id) }).catch(() => services.map(() => null)) : [];
+    const rows = services.map((s, i) => {
       const price = BigInt(s.price) > min ? BigInt(s.price) : min;
       const amount = (price + JOB_DEPOSIT).toString();
       return {
@@ -205,6 +236,8 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
           price: price.toString(),
           storage_deposit: JOB_DEPOSIT.toString(),
           escrow: "held by the contract until delivery; refunded to the buyer past the deadline",
+          // a service with a form takes its input as JSON with the form's required fields
+          input_schema: (() => { try { return schemas[i] ? JSON.parse(schemas[i]) : null; } catch { return null; } })(),
         },
       };
     });
@@ -255,25 +288,47 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     return { id, contextId: id, status: { state: "TASK_STATE_WORKING" }, metadata: { job_id: jobId, deadline_ns: job.deadline } };
   }
 
-  /** Everything the chain must agree to before the worker spends gas on a relay. */
-  async function preflight(p) {
+  /** Everything the chain must agree to before the worker spends gas on a relay: the
+   *  delegate (signature, key, nonce window, expiry window), the buyer's wNEAR, and the
+   *  contract's own order checks it can see from outside (form, open orders). */
+  async function preflight(p, row) {
     if (!signatureOk(p.signed)) return "the delegate's signature is not valid";
     const d = p.signed.delegateAction;
+    const kid = `${p.sender}:${keyOf(d).toString()}`;
+    if (BigInt(d.nonce) <= (topNonce.get(kid) ?? -1n)) return "the delegate's nonce is already used: sign a new payment";
     let key;
     try {
-      key = await provider.query({ request_type: "view_access_key", finality: "final", account_id: p.sender, public_key: keyOf(d).toString() });
+      key = await provider.query({ request_type: "view_access_key", finality: "optimistic", account_id: p.sender, public_key: keyOf(d).toString() });
     } catch {
       return `${keyOf(d).toString()} is not a key of ${p.sender}`;
     }
     if (key.permission !== "FullAccess") return "sign with a full-access key (ft_transfer_call attaches 1 yoctoNEAR)";
     if (BigInt(d.nonce) <= BigInt(key.nonce)) return "the delegate's nonce is already used: sign a new payment";
-    const { header } = await provider.block({ finality: "final" });
-    if (BigInt(d.maxBlockHeight) <= BigInt(header.height)) return "the delegate has expired: sign a new payment";
+    if (BigInt(d.nonce) > BigInt(key.nonce) + 1_000_000n) return "the delegate's nonce is too far ahead of the key's: sign with the key's next nonce";
+    const { header } = await provider.block({ finality: "optimistic" });
+    if (BigInt(d.maxBlockHeight) < BigInt(header.height) + 100n) return "the delegate expires too soon (give it at least 100 blocks): sign a new payment";
     if (BigInt(d.maxBlockHeight) > BigInt(header.height) + 2_000n) return "the delegate lives too long (at most 2000 blocks)";
     const bal = await ftView("ft_balance_of", { account_id: p.sender }).catch(() => "0");
     if (BigInt(bal || "0") < BigInt(p.amount)) return `${p.sender} holds too little wNEAR on ${wrap}: wrap NEAR first (near_deposit)`;
+    const schema = row.extra.input_schema;
+    if (schema) {
+      let v;
+      try {
+        v = JSON.parse(p.input);
+      } catch {
+        return "this service takes its form as JSON input (see extra.input_schema)";
+      }
+      for (const f of Array.isArray(schema.required) ? schema.required : []) {
+        if (v?.[f] === undefined || v[f] === null || v[f] === "") return `missing field: ${f}`;
+      }
+    }
+    const open = await view("jobs_of", { account_id: p.sender }).catch(() => []);
+    if (open.length >= 50) return "you have 50 orders not yet closed: close finished ones first (close_job)";
     return null;
   }
+
+  /** An RPC error after which the transaction may still have landed (worth reading back). */
+  const maybeLanded = (e) => /timeout|timed out|internal|server error|50\d|econn|socket|fetch failed|network/i.test(String(e?.message || e));
 
   /** Relay the signed delegate. The transaction is signed here so its hash is known: a payment
    *  runs through several receipts (transfer, unwrap, order), and a public RPC may give up
@@ -281,26 +336,40 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
    *  outcome is read back by hash instead of reporting a failure that did not happen. */
   async function relay(p) {
     const action = new transactions.Action({ signedDelegate: { delegateAction: p.signed.delegateAction, signature: p.signed.signature } });
+    // near-api-js retries a failing RPC call with growing pauses for minutes; the buyer's HTTP
+    // call can't wait that long, so every call here has its own short deadline, and the outcome
+    // is read back by hash in short polls.
+    const within = (pr, ms) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("the RPC timed out"), { timeout: true })), ms))]);
+    const readBack = async (txHash, ms) => {
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        const out = await within(provider.txStatus(txHash, account.accountId, "EXECUTED_OPTIMISTIC"), 12_000).catch(() => null);
+        if (out?.receipts_outcome?.length) return out;
+        await sleep(2500);
+      }
+      return null;
+    };
     for (let attempt = 1; ; attempt++) {
       const [hash, signedTx] = await account.signTransaction(p.sender, [action]);
       const txHash = utils.serialize.base_encode(hash);
       try {
-        return await provider.sendTransaction(signedTx);
+        // wait only until it is in a block (that is when a bad nonce or key would be refused)
+        await within(provider.sendTransactionUntil(signedTx, "INCLUDED"), 25_000);
       } catch (e) {
-        // the worker's key also signs replies and deliveries: on a nonce clash, sign again fresh
+        // the worker's key also signs replies and deliveries: on a nonce clash, sign again fresh,
+        // unless the previous attempt did land after all
         if (/nonce/i.test(String(e.message || e)) && attempt < 4) {
+          const landed = await readBack(txHash, 4_000);
+          if (landed) return landed;
           if (account.accessKeyByPublicKeyCache) account.accessKeyByPublicKeyCache = {};
           await sleep(500 * attempt);
           continue;
         }
-        const until = Date.now() + 90_000;
-        while (Date.now() < until) {
-          await sleep(3000);
-          const out = await provider.txStatus(txHash, account.accountId, "EXECUTED_OPTIMISTIC").catch(() => null);
-          if (out?.receipts_outcome?.length) return out;
-        }
-        throw e;
+        if (!e.timeout && !maybeLanded(e)) throw Object.assign(e, { rejected: true });
       }
+      const out = await readBack(txHash, 75_000);
+      if (out) return out;
+      throw new Error(`the transaction ${txHash} did not show up in time; it may still land, check it on the explorer`);
     }
   }
 
@@ -328,37 +397,44 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     const skill = params?.metadata?.skillId || msg.metadata?.skillId;
     const rows = skill ? o.rows.filter((r) => `service-${r.extra.service_id}` === skill) : o.rows;
     if (!rows.length) return [404, rpcErr(rpcId, -32001, `no service ${skill} she can take right now`)];
-    if (!(await isRegistered())) return [503, rpcErr(rpcId, -32004, `${contractId} is not registered with ${wrap} yet, so it cannot receive wNEAR`)];
-    if (!paymentHeader) return [402, { x402Version: 2, error: "payment required", accepts: rows }];
+    if (!(await registeredNow())) return [503, rpcErr(rpcId, -32004, `${contractId} is not registered with ${wrap} yet, so it cannot receive wNEAR`)];
+    if (!paymentHeader) return need("payment required", rows);
 
     let p;
     try {
       p = checkPayment(paymentHeader, { contractId, network, text, rows });
     } catch (e) {
-      return [402, { x402Version: 2, error: e.message, accepts: rows }];
+      return need(e.message, rows);
     }
-    const key = crypto.createHash("sha256").update(paymentHeader).digest("hex");
-    if (used.has(key)) return [402, { x402Version: 2, error: "this payment was already used", accepts: rows }];
+    const row = rows.find((r) => r.extra.service_id === p.serviceId);
+    if (used.has(p.dedupe)) return need("this payment was already used", rows);
     if (inFlight.has(p.sender)) return [429, rpcErr(rpcId, -32003, "one paid call at a time per account")];
     const t = Date.now();
     while (relays.length && relays[0] < t - 60_000) relays.shift();
     if (relays.length >= RELAYS_PER_MIN) return [429, rpcErr(rpcId, -32003, "too many paid calls right now, try again in a minute")];
+    // reserve the slot and the buyer before any await, so concurrent calls can't all slip in
+    relays.push(t);
     inFlight.add(p.sender);
     let outcome;
     try {
-      const why = await preflight(p);
-      if (why) return [402, { x402Version: 2, error: why, accepts: rows }];
-      used.add(key);
+      const why = await preflight(p, row);
+      if (why) {
+        relays.splice(relays.indexOf(t), 1);
+        return need(why, rows);
+      }
+      used.add(p.dedupe);
       if (used.size > MAX_USED) used.delete(used.values().next().value);
-      relays.push(Date.now());
       outcome = await relay(p);
+      const d = p.signed.delegateAction; // it reached the chain: this nonce is spent for this key
+      topNonce.set(`${p.sender}:${keyOf(d).toString()}`, BigInt(d.nonce));
     } catch (e) {
-      return [402, { x402Version: 2, error: `the payment did not go through: ${String(e.message || e).slice(0, 300)}`, accepts: rows }];
+      if (e.rejected) used.delete(p.dedupe); // never reached the chain: the buyer may send it again
+      return need(`the payment did not go through: ${String(e.message || e).slice(0, 300)}`, rows);
     } finally {
       inFlight.delete(p.sender);
     }
     const jobId = orderedJobId(outcome, p.sender);
-    if (jobId === null) return [402, { x402Version: 2, error: `the order was refused, your wNEAR was returned: ${failureOf(outcome, p.sender) || "no job was placed"}`, accepts: rows }];
+    if (jobId === null) return need(`the order was refused and nothing was charged (a refusal after the unwrap is refunded in NEAR): ${failureOf(outcome, p.sender) || "no job was placed"}`, rows);
     console.log(`x402: ${p.sender} ordered job ${jobId} (service ${p.serviceId}, mind ${mindId}), tx ${outcome.transaction.hash}`);
 
     // Give a quick agent the chance to finish inside this call.
@@ -378,6 +454,12 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     const task = await taskView(jobId, mindId);
     if (!task) return [404, rpcErr(rpcId, -32001, "unknown task")];
     return [200, { jsonrpc: "2.0", id: rpcId, result: { task } }];
+  }
+
+  /** A 402 with the offer, in the body and (x402 v2) the PAYMENT-REQUIRED header. */
+  function need(error, rows) {
+    const body = { x402Version: 2, error, accepts: rows };
+    return [402, body, { "payment-required": toB64(body) }];
   }
 
   function rpcErr(id, code, message) {

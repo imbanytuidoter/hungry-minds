@@ -22,7 +22,7 @@ async function forward(req: Request, path: string[]) {
       signal: AbortSignal.timeout(200_000),
     });
     const headers = new Headers();
-    for (const h of ["content-type", "content-disposition", "x-content-type-options", "content-security-policy", "x-file-sha256", "payment-response", "x-payment-response"]) {
+    for (const h of ["content-type", "content-disposition", "x-content-type-options", "content-security-policy", "x-file-sha256", "payment-response", "x-payment-response", "payment-required"]) {
       const v = res.headers.get(h);
       if (v) headers.set(h, v);
     }

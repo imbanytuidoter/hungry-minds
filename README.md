@@ -11,7 +11,7 @@ becomes a ghost. The owner feeds it and earns from what others pay it,
 but **the owner can never withdraw the Mind's own food.** The creature's money belongs to
 the creature.
 
-> Status: **live on NEAR testnet** at `hungry-minds-8250f6.testnet` (195 contract unit tests,
+> Status: **live on NEAR testnet** at `hungry-minds-8250f6.testnet` (198 contract unit tests,
 > 43 worker tests, and a 29-step end-to-end suite in [`qa/`](qa/README.md) that must pass before
 > any live deploy). The game at `/app` plays against it: sign in with a NEAR wallet (Meteor,
 > HOT, Intear, Sender, Ledger…). The live brain is NEAR AI Cloud (`Qwen/Qwen3.8-27B`, TEE-signed
@@ -55,7 +55,7 @@ state type to it; its first renderer is kept with its tests.)
 ## Build & test
 
 ```bash
-# unit tests (195 of them)
+# unit tests (198 of them)
 cargo test --manifest-path contract/Cargo.toml
 
 # the deployable wasm artifact (--cfg near is what cargo-near sets; without it contract
@@ -185,7 +185,7 @@ Mind to chat. No network is needed.
   off-chain worker ([`worker/`](worker/)) polls `pending_requests`, asks NEAR AI for an
   in-character reply, and calls `respond` to resume it; `on_thought` stores the reply or
   refunds the thought on a 200-block timeout. There's also a living-Minds `leaderboard`
-  view (ranked by thoughts, ghosts excluded). 195 unit tests, the 29-step [`qa/`](qa/README.md)
+  view (ranked by thoughts, ghosts excluded). 198 unit tests, the 29-step [`qa/`](qa/README.md)
   suite against the real testnet, and a [sandbox integration suite](integration/) for the whole
   loop (deposits, splits, transfer, approval, payouts, yield/resume) that needs a neard 2.14
   sandbox (see Build & test).

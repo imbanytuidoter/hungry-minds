@@ -1180,6 +1180,9 @@ impl Contract {
         near_sdk::assert_one_yocto();
         let id: u64 = token_id.parse().unwrap_or_else(|_| env::panic_str("token_id must be a number"));
         let sender = env::predecessor_account_id();
+        // the seller's own agent, unplugged by nft_resolve_transfer if the transfer stands (and
+        // only that one: the receiver may plug in its own agent meanwhile)
+        let seller_agent = agents::agent_account(id);
         let (old_owner, cleared) = self.hand_over(id, &sender, &receiver_id, approval_id, &memo);
 
         ext_nft_receiver::ext(receiver_id.clone())
@@ -1188,7 +1191,7 @@ impl Contract {
             .then(
                 Self::ext(env::current_account_id())
                     .with_static_gas(GAS_FOR_RESOLVE_TRANSFER)
-                    .nft_resolve_transfer(old_owner, receiver_id, token_id, cleared),
+                    .nft_resolve_transfer(old_owner, receiver_id, token_id, cleared, seller_agent),
             )
             .into()
     }
@@ -1202,6 +1205,7 @@ impl Contract {
         receiver_id: AccountId,
         token_id: String,
         cleared_approvals: BTreeMap<AccountId, u64>,
+        seller_agent: Option<AccountId>,
     ) -> bool {
         // A bool is a few bytes; cap the read. Ok -> parse the receiver's answer,
         // Err (failed or oversized) -> treat as "return the token".
@@ -1213,7 +1217,9 @@ impl Contract {
             // The transfer stands: the old approvals are gone for good, so refund the storage
             // the previous owner staked for them, and the seller's own agent is unplugged.
             if let Ok(id) = token_id.parse::<u64>() {
-                self.unplug_on_sale(id);
+                if seller_agent.is_some() && agents::agent_account(id) == seller_agent {
+                    self.unplug_on_sale(id);
+                }
             }
             refund_cleared_approvals(&cleared_approvals, &previous_owner_id);
             return true;
