@@ -287,6 +287,9 @@ export const chat = (s: Signer, id: number, prompt: string, near = 0.01) =>
 /** Prepay chat credits for talking to other keepers' Minds (one approval for many messages). */
 export const buyChatCredits = (s: Signer, yocto: string) =>
   callContract(s, "buy_chat_credits", {}, yocto);
+/** Take back your own unspent chat credits (the worker settles usage every minute). */
+export const withdrawChatCredits = (s: Signer) =>
+  callContract(s, "withdraw_chat_credits", {}, ONE_YOCTO);
 export const feed = (s: Signer, id: number, near = 0.05) =>
   callContract(s, "feed", { id }, nearToYocto(near));
 export const claimEarnings = (s: Signer, id: number) =>

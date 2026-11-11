@@ -144,7 +144,7 @@ impl Contract {
         require!(amount > 0, "you have no chat credits to withdraw");
         credits.remove(&caller);
         env::log_str(&format!("chat_credits_withdrawn account={caller} amount={amount}"));
-        near_sdk::Promise::new(caller).transfer(NearToken::from_yoctonear(amount));
+        let _ = near_sdk::Promise::new(caller).transfer(NearToken::from_yoctonear(amount));
         NearToken::from_yoctonear(amount)
     }
 

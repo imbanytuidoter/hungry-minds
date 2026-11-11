@@ -88,6 +88,7 @@ export type Game = {
   loadChatLeft: (id: number) => void;
   /** Live: prepay chat credits for this many messages to other keepers' Minds. */
   buyCredits: (messages: number) => Promise<boolean>;
+  withdrawCredits: () => Promise<boolean>;
   order: (serviceId: number, prompt: string) => Promise<boolean>;
   claim: (id: number) => Promise<boolean>;
   reap: (id: number) => Promise<boolean>;
@@ -262,6 +263,7 @@ function useDemo(enabled: boolean): Game {
     chatLeft: {},
     loadChatLeft: () => {},
     buyCredits: async () => false,
+    withdrawCredits: async () => false,
     order: async (serviceId, prompt) => {
       const s = world?.services.find((x) => x.id === serviceId);
       const m = s && world?.minds.find((x) => x.id === s.mindId);
@@ -806,6 +808,11 @@ function useLive(enabled: boolean): Game {
       const per = paramsYocto.current?.guest_min_price ?? chain.nearToYocto(params.guestMinPrice);
       const ok = await send((s) => chain.buyChatCredits(s, (BigInt(per) * BigInt(Math.max(1, Math.floor(messages)))).toString()));
       if (ok) setChatLeft({}); // re-read per Mind as the chat panels ask
+      return ok;
+    },
+    withdrawCredits: async () => {
+      const ok = await send((s) => chain.withdrawChatCredits(s));
+      if (ok) setChatLeft({});
       return ok;
     },
     order: orderAsJob,

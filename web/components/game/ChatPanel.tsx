@@ -194,6 +194,17 @@ signature ${m.proof.signature}` : "NEAR AI wrote this reply, but its signature w
           ))}
         </div>
       )}
+      {!own && typeof left === "number" && left > 0 && (
+        <button
+          className="btn-ghost pill"
+          disabled={g.busy}
+          style={{ alignSelf: "flex-start", fontSize: 12.5, opacity: 0.85 }}
+          onClick={() => void g.withdrawCredits().then((ok) => ok && loadChatLeft(mind.id))}
+          title="Take back your unused chat credits (the worker settles usage every minute)"
+        >
+          Withdraw unused credits
+        </button>
+      )}
       {schema && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 8, padding: "10px 12px", borderRadius: 16, background: "color-mix(in srgb, var(--surface) 70%, transparent)" }}>
           {Object.entries(schema.properties).map(([k, p]) => (
