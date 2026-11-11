@@ -35,22 +35,81 @@ function clipBytes(s, n) {
 const sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
 const str = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
+// A tool's input schema goes into the planner's prompts and the public /status; an agent could
+// send megabytes of it. Over this size it is dropped (the tool still works with JSON input).
+const MAX_SCHEMA_BYTES = 4096;
+function capSchema(s) {
+  if (!s || typeof s !== "object") return null;
+  try {
+    return bytes(JSON.stringify(s)) <= MAX_SCHEMA_BYTES ? s : null;
+  } catch {
+    return null;
+  }
+}
+/** An agent's skills as stored: bounded in number and size, whatever its card or MCP server says. */
+function trimSkills(skills) {
+  return (Array.isArray(skills) ? skills : []).slice(0, 50).map((k) => ({
+    id: str(k?.id, 100),
+    name: str(k?.name, 100),
+    description: str(k?.description, 500),
+    examples: (Array.isArray(k?.examples) ? k.examples : []).filter((e) => typeof e === "string").slice(0, 5).map((e) => str(e, 200)),
+    ...(k?.category ? { category: str(k.category, 40) } : {}),
+    ...(k?.inputSchema ? { inputSchema: capSchema(k.inputSchema) } : {}),
+  }));
+}
+/** The agent's address as shown publicly: no user:password@, no ?query or #fragment (owners
+ *  sometimes put a key there). An official agent's "url" is its id and is shown as is. */
+function publicUrl(raw) {
+  try {
+    const u = new URL(raw);
+    u.username = "";
+    u.password = "";
+    u.search = "";
+    u.hash = "";
+    return u.href;
+  } catch {
+    return String(raw || "").split(/[?#]/)[0];
+  }
+}
+
+const NAVIGATE_PER_MIN = 6;
+const CATALOGUE_MS = 60_000;
+const HANDED_OVER = "the Mind changed hands: connect your own agent";
+
 function makeGateway({ view, account, contractId, workerId, store, plan, readToken }) {
   const busy = new Set();
   const attempts = new Map();
   const done = new Set();
   const lastTest = new Map();
+  const navigations = new Map(); // account -> times of its Navigator calls in the last minute
   let lastHealth = 0;
 
   const ownerOf = async (mindId) => (await view("get_mind", { id: mindId }))?.owner || null;
   const serves = (mindId) => !!store.conn(mindId);
-  /** Her agent as the chat needs it: its name, what it can do, and whether it is waiting for
-   *  an answer from `who` (it asked a question, so their next message goes to it). */
+
+  // The connection holds the API key of whoever connected it (connectedBy). Once the NFT
+  // changes hands, the old owner's agent and key must not keep serving the new owner for free
+  // tests and chat: those are refused until the new owner connects their own agent (or
+  // disconnects it). Paid JOBS keep running on purpose: the contract pays the new owner on
+  // delivery, a buyer who already paid still gets the work, and "the agent goes with the Mind"
+  // is what a buyer of the NFT was promised; the old owner can stop that by disconnecting.
+  const handedOver = (c, owner) => !!c?.connectedBy && owner !== null && owner !== c.connectedBy;
+  async function checkHands(mindId) {
+    const c = store.conn(mindId);
+    if (!c) return false;
+    const moved = handedOver(c, await ownerOf(mindId));
+    if (!!c.handedOver !== moved) store.patchConn(mindId, { handedOver: moved });
+    return moved;
+  }
+
+  /** Her agent as the chat needs it: its name, what it can do, who connected it, and whether
+   *  it is waiting for an answer from `who` (it asked a question, so their next message goes to it). */
   function about(mindId) {
     const c = store.conn(mindId);
     if (!c) return null;
     return {
       name: c.name || "her agent",
+      connectedBy: c.connectedBy || null,
       skills: (c.skills || []).map(({ name, description, examples }) => ({ name, description: description || "", examples: examples || [] })),
       waiting: (who) => !!store.chat(mindId, who).taskId,
     };
@@ -62,15 +121,17 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
     return {
       mind_id: mindId,
       kind: c.kind,
-      url: c.url,
+      url: publicUrl(c.url),
       name: c.name,
       description: c.description,
       provider: c.provider,
       version: c.version,
-      skills: (c.skills || []).map(({ id, name, description, examples, category, inputSchema }) => ({ id, name, description, examples, category: category || null, inputSchema: inputSchema || null })),
-      online: !!c.online,
+      skills: (c.skills || []).map(({ id, name, description, examples, category, inputSchema }) => ({ id, name, description, examples, category: category || null, inputSchema: capSchema(inputSchema) })),
+      online: !!c.online && !c.handedOver,
+      // the NFT was sold after this agent was connected: the new owner must connect their own
+      needs_reconnect: !!c.handedOver,
       last_seen: c.lastSeen || 0,
-      last_error: c.lastError || null,
+      last_error: c.handedOver ? HANDED_OVER : c.lastError || null,
       since: c.since,
       gateway: workerId,
     };
@@ -149,11 +210,13 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
   async function health() {
     lastHealth = Date.now();
     for (const id of store.mindIds()) {
+      await checkHands(id).catch(() => {});
       const c = store.conn(id);
       if (c.kind !== "a2a" && c.kind !== "mcp") continue; // the others are judged by their last call
       try {
         const d = await discover(c, store.secretOf(id));
-        store.patchConn(id, { online: true, lastSeen: Date.now(), lastError: null, skills: d.skills.slice(0, 50), card: d.card, name: d.name });
+        // the same bounds as onConnect: a card that grew can't bloat the store or the prompts
+        store.patchConn(id, { online: true, lastSeen: Date.now(), lastError: null, skills: trimSkills(d.skills), card: d.card, name: str(d.name, 60) || c.name, ...(d.description ? { description: str(d.description, 500) } : {}) });
       } catch (e) {
         store.patchConn(id, { online: false, lastError: e.message.slice(0, 200) });
       }
@@ -185,6 +248,8 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
   // ── chat ──
   async function chat(mindId, who, prompt) {
     const conn = store.conn(mindId);
+    if (!conn) throw new Error("no agent connected");
+    if (await checkHands(mindId)) throw new Error(HANDED_OVER);
     const c = store.chat(mindId, who);
     const out = await run(conn, store.secretOf(mindId), { text: prompt, contextId: c.contextId, taskId: c.taskId, history: c.history || [], mindId, buyer: who, chat: true, timeoutMs: 150_000 }, plan);
     if (out.state === "failed") throw new Error(out.text || "the agent failed");
@@ -231,10 +296,11 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
         description: str(d.description, 500) || conn.description,
         provider: str(d.provider, 80),
         version: str(d.version, 40),
-        skills: d.skills.slice(0, 50),
+        skills: trimSkills(d.skills),
         card: d.card,
         skillMap: prev?.url === conn.url ? prev.skillMap : {},
         connectedBy: who,
+        handedOver: false,
         since: Date.now(),
         online: true,
         lastSeen: Date.now(),
@@ -253,7 +319,10 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
     const who = readToken(b.token);
     if (!who) return [401, { error: "sign in again" }];
     const mindId = Number(b.mindId);
-    if ((await ownerOf(mindId)) !== who) return [403, { error: "only her owner can disconnect her agent" }];
+    const c = store.conn(mindId);
+    // her current owner, or whoever connected it (their API key is in it: after a sale they
+    // must still be able to take it back)
+    if ((await ownerOf(mindId)) !== who && !(c && c.connectedBy === who)) return [403, { error: "only her owner, or whoever connected the agent, can disconnect it" }];
     store.dropConn(mindId);
     return [200, { ok: true }];
   }
@@ -264,7 +333,9 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
     const mindId = Number(b.mindId);
     const c = store.conn(mindId);
     if (!c) return [404, { error: "no agent connected" }];
-    if ((await ownerOf(mindId)) !== who) return [403, { error: "not her owner" }];
+    const owner = await ownerOf(mindId);
+    if (owner !== who) return [403, { error: "not her owner" }];
+    if (handedOver(c, owner)) return [409, { error: HANDED_OVER }];
     const s = await view("get_service", { service_id: Number(b.serviceId) }).catch(() => null);
     if (!s || s.mind_id !== mindId) return [400, { error: "that service is not hers" }];
     if (!(c.skills || []).some((k) => k.id === b.skillId)) return [400, { error: "no such skill" }];
@@ -278,7 +349,12 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
     const mindId = Number(b.mindId);
     const c = store.conn(mindId);
     if (!c) return [404, { error: "no agent connected" }];
-    if ((await ownerOf(mindId)) !== who) return [403, { error: "only her owner can test her agent for free" }];
+    const owner = await ownerOf(mindId);
+    if (owner !== who) return [403, { error: "only her owner can test her agent for free" }];
+    if (handedOver(c, owner)) {
+      store.patchConn(mindId, { handedOver: true });
+      return [409, { error: HANDED_OVER }];
+    }
     if (Date.now() - (lastTest.get(who) || 0) < 8_000) return [429, { error: "one test every few seconds" }];
     lastTest.set(who, Date.now());
     try {
@@ -294,7 +370,19 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
 
   // ── Navigator: a request in plain words → the services that can do it, with the input ready ──
   const words = (s) => new Set(String(s || "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2));
-  async function catalogue() {
+  // The catalogue costs a dozen views; every Navigator call within a minute shares one read
+  // (and concurrent calls share the read in flight).
+  let catalogueCache = { at: -Infinity, p: null };
+  function catalogue() {
+    if (catalogueCache.p && Date.now() - catalogueCache.at < CATALOGUE_MS) return catalogueCache.p;
+    const p = readCatalogue();
+    catalogueCache = { at: Date.now(), p };
+    p.catch(() => {
+      if (catalogueCache.p === p) catalogueCache = { at: -Infinity, p: null }; // don't keep a failure
+    });
+    return p;
+  }
+  async function readCatalogue() {
     const snap = await view("colony_snapshot", {});
     let services = snap.services;
     for (let from = services.length; services.length % 100 === 0 && services.length && from < 1000; from += 100) {
@@ -316,8 +404,18 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
   }
 
   async function onNavigate(b) {
+    // The Navigator asks the colony model, which also writes the paid replies (one serial
+    // queue): only signed-in players, and a few calls a minute each.
+    const who = readToken(b.token);
+    if (!who) return [401, { error: "sign in again" }];
     const text = str(b.text, 500);
     if (!text) return [400, { error: "say what you need" }];
+    const t = Date.now();
+    const recent = (navigations.get(who) || []).filter((x) => x > t - 60_000);
+    if (recent.length >= NAVIGATE_PER_MIN) return [429, { error: "a few searches a minute: try again shortly" }];
+    recent.push(t);
+    navigations.set(who, recent);
+    if (navigations.size > 5000) for (const [k, v] of navigations) if (!v.some((x) => x > t - 60_000)) navigations.delete(k);
     const all = await catalogue();
     if (!all.length) return [200, { suggestions: [], note: "No live services yet." }];
     const w = words(text);
@@ -327,7 +425,15 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
     let picks = scored.slice(0, 3).filter((x) => x.score > 0).map((x) => ({ s: x.s, why: "matches your words" }));
     if (plan) {
       try {
-        const list = scored.slice(0, 25).map((x) => `#${x.s.id} "${x.s.title}": ${x.s.description.slice(0, 160)}${x.s.schema ? ` | input fields: ${JSON.stringify(x.s.schema.properties)}` : " | input: free text"}`).join("\n");
+        // each service's form at most 1 KB here and the whole list at most 16 KB, whatever the
+        // owners wrote, so one listing can't crowd out the rest or bloat the planner's prompt
+        const list = clipBytes(
+          scored
+            .slice(0, 25)
+            .map((x) => `#${x.s.id} "${x.s.title}": ${x.s.description.slice(0, 160)}${x.s.schema ? ` | input fields: ${clipBytes(JSON.stringify(x.s.schema.properties || {}), 1024)}` : " | input: free text"}`)
+            .join("\n"),
+          16_000
+        );
         const out = await plan(
           `You route a user's request to services in an agent marketplace. Services:
 ${list}
@@ -413,6 +519,14 @@ Answer with only JSON: {"picks":[{"id":<service id>,"input":<an object with the 
     if (!ok && meta.mindId !== null && meta.mindId !== undefined) ok = who === (await ownerOf(meta.mindId));
     if (!ok) return [403, { error: "not your file" }];
     const inline = INLINE.has(meta.mime);
+    // read before any header goes out: a missing file is then a clean 404, not a second
+    // writeHead after the first one (ERR_HTTP_HEADERS_SENT)
+    let data;
+    try {
+      data = store.fileData(id);
+    } catch {
+      return [404, { error: "that file is no longer stored" }];
+    }
     res.writeHead(200, {
       "content-type": inline ? meta.mime : "application/octet-stream",
       "content-disposition": `${inline ? "inline" : "attachment"}; filename="${meta.name.replace(/[^\w.\- ]/g, "_")}"`,
@@ -420,7 +534,7 @@ Answer with only JSON: {"picks":[{"id":<service id>,"input":<an object with the 
       "content-security-policy": "sandbox",
       "x-file-sha256": meta.sha256,
     });
-    res.end(store.fileData(id));
+    res.end(data);
     return null;
   }
 
@@ -463,4 +577,4 @@ Answer with only JSON: {"picks":[{"id":<service id>,"input":<an object with the 
   return { serves, about, chat, tick, route, health, resultOf, questionOf, answerJob };
 }
 
-module.exports = { makeGateway };
+module.exports = { makeGateway, trimSkills, publicUrl, capSchema, MAX_SCHEMA_BYTES, HANDED_OVER };

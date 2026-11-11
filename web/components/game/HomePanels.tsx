@@ -138,7 +138,7 @@ export function LifePanel({ mind }: { mind: MindRec }) {
           </span>
         </div>
         <span style={{ fontSize: 14, lineHeight: 1.5, color: "var(--muted-2)" }}>
-          {mind.name} ran out of food and can&apos;t think. Any feeding that covers one thought wakes {her}. If nobody does, after {g.clock.ghostMs >= 86_400_000 ? `${Math.round(g.clock.ghostMs / 86_400_000)} days` : `${Math.round(g.clock.ghostMs / 60_000)} minutes (a demo build; 30 days on mainnet)`} anyone can reap {her} into a ghost, forever.
+          {mind.name} ran out of food and can&apos;t think. Any feeding that covers one thought wakes {her}. If nobody does, after {g.clock.ghostMs >= 86_400_000 ? `${Math.round(g.clock.ghostMs / 86_400_000)} days` : `${Math.round(g.clock.ghostMs / 60_000)} minutes (a demo build; 30 days on a production build)`} anyone can reap {her} into a ghost, forever.
         </span>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className="btn-cta" style={{ flex: 1, fontSize: 15 }} disabled={busy} onClick={() => act(() => g.revive(mind.id))}>
@@ -177,6 +177,7 @@ export function TodayPanel({ mind }: { mind: MindRec }) {
   const mineToo = mind.owner === g.account;
   const st = stateOf(mind);
   const [why, setWhy] = useState(false);
+  const [claiming, setClaiming] = useState(false);
   // Mood is game feel kept in the browser, but it must not contradict the chain: hunger caps
   // it (a ghost feels nothing, a Mind asleep from hunger has no energy and little joy).
   const cap = moodCap(st);
@@ -201,7 +202,7 @@ export function TodayPanel({ mind }: { mind: MindRec }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 13, lineHeight: 1.45, padding: "10px 12px", borderRadius: 16, background: "color-mix(in srgb, var(--surface) 55%, transparent)" }}>
           <span>
             <b>Food</b> is real NEAR: {mind.name}&apos;s own balance in the contract (not your wallet). One Dream swirl of food ({FOOD_BAR_FULL} NEAR) = 100%. Every thought burns {g.params.thoughtCost} NEAR ({per}%): each chat reply, and{" "}
-            {g.mode === "demo" ? "a quiet thought every 6 s on this fast demo clock" : `${g.params.idleRatePerDay} quiet thoughts a day on her own (−${Math.round(per * g.params.idleRatePerDay)}% a day)`}. Feeding adds 95% of what you pay. At zero she falls asleep.
+            {g.mode === "demo" ? "a quiet thought every 6 s on this fast demo clock" : `${g.params.idleRatePerDay} quiet thoughts a day on her own (−${Math.round(per * g.params.idleRatePerDay)}% a day)`}. Feeding adds 95% of what you pay. Below one thought ({g.params.thoughtCost} NEAR) of food she falls asleep.
           </span>
           <span>
             <b>Happiness</b> fades {MOOD.happyLossPerHour}% an hour while nobody looks after her (never below 10%). Petting +{MOOD.pet}, each reply +{MOOD.chat}, a meal +{MOOD.feedHappy}.
@@ -241,8 +242,16 @@ export function TodayPanel({ mind }: { mind: MindRec }) {
               </>
             )}
           </div>
-          <button className="btn-ghost" disabled={mind.ownerUnclaimed <= 0} onClick={() => g.claim(mind.id)}>
-            Claim
+          <button
+            className="btn-ghost"
+            disabled={mind.ownerUnclaimed <= 0 || claiming || g.busy}
+            onClick={async () => {
+              setClaiming(true);
+              await g.claim(mind.id);
+              setClaiming(false);
+            }}
+          >
+            {claiming ? "Claiming…" : "Claim"}
           </button>
         </div>
       )}

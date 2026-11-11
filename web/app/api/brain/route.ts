@@ -1,14 +1,22 @@
 // The Minds' brain, server side: build the persona prompt and ask the model. Calls are queued
 // (one at a time) and rate limits are waited out rather than skipped, so a reply is a real
-// one.
+// one. It is this site's own door, not an open proxy: same-origin callers only, a few
+// replies a minute per address, and a short queue (past it, the browser falls back to the
+// offline phrasebook).
 
 import { systemPrompt, type Persona } from "@/lib/game/brain";
+import { KB, readCapped, tooLarge } from "@/lib/readBody";
 
 const LLM_URL = process.env.LLM_URL || "https://text.pollinations.ai/openai";
 const LLM_KEY = process.env.LLM_KEY || "";
 const LLM_MODEL = process.env.LLM_MODEL || "openai";
 
+const PER_MINUTE = 10; // replies per address per minute
+const MAX_WAITING = 20; // calls queued behind the one in flight
+
 let queue: Promise<unknown> = Promise.resolve();
+let waiting = 0;
+const hits = new Map<string, number[]>();
 
 async function ask(persona: Persona, prompt: string, attempt = 0): Promise<string> {
   const res = await fetch(LLM_URL, {
@@ -39,23 +47,72 @@ async function ask(persona: Persona, prompt: string, attempt = 0): Promise<strin
   return Array.from(text).slice(0, 1000).join("");
 }
 
-export async function POST(req: Request) {
-  let body: { persona?: Persona; prompt?: string };
+/** The calling page must be this site: its Origin (or Referer) host is the Host it asked. */
+function sameOrigin(req: Request): boolean {
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
+  const from = req.headers.get("origin") || req.headers.get("referer");
+  if (!host || !from) return false;
   try {
-    body = await req.json();
+    return new URL(from).host === host;
   } catch {
-    return Response.json({ error: "bad json" }, { status: 400 });
+    return false;
   }
-  const { persona, prompt } = body;
-  if (!persona?.name || typeof prompt !== "string" || prompt.length > 600) return Response.json({ error: "bad request" }, { status: 400 });
-  const persona_: Persona = {
-    name: String(persona.name).slice(0, 32),
-    traits: (persona.traits ?? []).slice(0, 7).map(Number),
-    state: String(persona.state ?? "content"),
-    thoughts: Number(persona.thoughts ?? 0),
-    natures: (persona.natures ?? []).slice(0, 3).map(Number),
-  };
-  const run = queue.then(() => ask(persona_, prompt));
+}
+
+function clientIp(req: Request): string {
+  return (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || req.headers.get("x-real-ip") || "local";
+}
+
+/** True when this address still has a reply left this minute (and counts this one). */
+function allow(ip: string): boolean {
+  const t = Date.now();
+  const recent = (hits.get(ip) ?? []).filter((x) => t - x < 60_000);
+  if (recent.length >= PER_MINUTE) {
+    hits.set(ip, recent);
+    return false;
+  }
+  recent.push(t);
+  hits.set(ip, recent);
+  if (hits.size > 5000) for (const [k, v] of hits) if (!v.some((x) => t - x < 60_000)) hits.delete(k);
+  return true;
+}
+
+/** A list of small whole numbers (trait dials, nature indices), or null if it is anything else. */
+const nums = (v: unknown, max: number): number[] | null =>
+  v === undefined ? [] : Array.isArray(v) && v.length <= max && v.every((x) => Number.isInteger(x) && x >= 0 && x < 1000) ? (v as number[]) : null;
+
+export async function POST(req: Request) {
+  if (!sameOrigin(req)) return Response.json({ error: "forbidden" }, { status: 403 });
+  if (!allow(clientIp(req))) return Response.json({ error: "Too many messages. Wait a minute." }, { status: 429 });
+  if (waiting >= MAX_WAITING) return Response.json({ error: "The brain is busy. Try again soon." }, { status: 429 });
+  const raw = await readCapped(req, 64 * KB);
+  if (raw === null) return tooLarge();
+  let persona_: Persona;
+  let prompt: string;
+  try {
+    const body = JSON.parse(raw) as { persona?: Record<string, unknown> | null; prompt?: unknown };
+    const p = body?.persona;
+    const traits = nums(p?.traits, 7);
+    const natures = nums(p?.natures, 3);
+    if (!p || typeof p !== "object" || typeof p.name !== "string" || !p.name) throw new Error("bad");
+    if (typeof body.prompt !== "string" || body.prompt.length > 600 || !traits || !natures) throw new Error("bad");
+    if ((p.state !== undefined && typeof p.state !== "string") || (p.thoughts !== undefined && typeof p.thoughts !== "number")) throw new Error("bad");
+    prompt = body.prompt;
+    persona_ = {
+      name: p.name.slice(0, 32),
+      traits,
+      state: String(p.state ?? "content").slice(0, 16),
+      thoughts: Math.max(0, Math.floor(Number(p.thoughts ?? 0))) || 0,
+      natures,
+    };
+  } catch {
+    return Response.json({ error: "bad request" }, { status: 400 });
+  }
+  waiting++;
+  const run = queue.then(() => {
+    waiting--;
+    return ask(persona_, prompt);
+  });
   queue = run.catch(() => {});
   try {
     const text = await run;

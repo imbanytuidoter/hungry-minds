@@ -143,10 +143,17 @@ export function settle(m: MindRec, now: number, p: Params, clock: Clock): MindRe
   };
 }
 
-/** How long until the Mind falls asleep if nobody feeds it (ms). */
-export function timeToSleep(m: MindRec, p: Params, clock: Clock): number {
+/** How long until the Mind falls asleep if nobody feeds it (ms). She sleeps at the quiet
+ *  thought that leaves her less than one thought of food; the next one comes a full idle
+ *  interval after her last metabolism tick, so the time already into it is taken off. */
+export function timeToSleep(m: MindRec, p: Params, clock: Clock, now = Date.now()): number {
   if (m.ghost || m.asleepSince !== 0) return 0;
-  return Math.floor(m.balance / p.thoughtCost) * clock.idleMs;
+  // the epsilon keeps 0.006 / 0.002 from flooring to 2 (as feedGain)
+  const burns = Math.floor(m.balance / p.thoughtCost + 1e-9);
+  if (burns <= 0) return 0;
+  if (!Number.isFinite(clock.idleMs)) return Infinity;
+  const into = m.lastMetabolismTs > 0 && now > m.lastMetabolismTs ? (now - m.lastMetabolismTs) % clock.idleMs : 0;
+  return Math.max(0, burns * clock.idleMs - into);
 }
 
 // ── Live mood (off chain, kept in the browser with the time it was set) ──────────

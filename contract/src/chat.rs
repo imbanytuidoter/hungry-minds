@@ -67,6 +67,11 @@ impl Contract {
         // for, which is all the responder may earn (it can never be paid from thin air).
         let (mut paid, mut thoughts) = (0u32, 0u32);
         if u.own {
+            // Her food pays only for her current owner's own messages (a batch can't bill a
+            // Mind for someone else, or for a seller's chat after she changed hands).
+            if u.payer != mind.owner {
+                return 0;
+            }
             for _ in 0..u.count {
                 if !self.minds.get_mut(&u.mind_id).unwrap().spend_one_thought(now, cost) {
                     break;
@@ -224,6 +229,17 @@ mod tests {
         assert_eq!(m.balance.as_yoctonear(), 0);
         assert_ne!(m.asleep_since, 0);
         assert_eq!(earned(&c), 100 * MILLI);
+    }
+
+    #[test]
+    fn own_chats_bill_her_food_only_for_her_current_owner() {
+        let mut c = colony();
+        as_who("worker.near", 0);
+        // a batch can't bill alice's Mind for someone else's "own" chat
+        let r = c.settle_chats(1, vec![item("mallory.near", true, 10)], None);
+        assert_eq!((r.charged, r.skipped), (0, 10));
+        assert_eq!(c.get_mind(0).unwrap().balance.as_yoctonear(), 100 * MILLI);
+        assert_eq!(earned(&c), 0);
     }
 
     #[test]

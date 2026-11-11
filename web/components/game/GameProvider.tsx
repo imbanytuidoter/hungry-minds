@@ -86,8 +86,8 @@ export type Game = {
   /** Live: messages you can still send each Mind before paying more (her food, or your chat credits). */
   chatLeft: Record<number, number>;
   loadChatLeft: (id: number) => void;
-  /** Live: prepay chat credits for talking to other keepers' Minds. */
-  buyCredits: (near: number) => Promise<boolean>;
+  /** Live: prepay chat credits for this many messages to other keepers' Minds. */
+  buyCredits: (messages: number) => Promise<boolean>;
   order: (serviceId: number, prompt: string) => Promise<boolean>;
   claim: (id: number) => Promise<boolean>;
   reap: (id: number) => Promise<boolean>;
@@ -304,15 +304,20 @@ function useDemo(enabled: boolean): Game {
 // `ts` is when happy/energy were last set; moodAt() ages them from there.
 type Feel = Pick<MindRec, "happy" | "energy" | "love" | "msgs"> & { ts?: number };
 const FRESH = { happy: 80, energy: 70 };
-const FEEL_KEY = "hm-live-feel";
+/** Chat history and mood are kept per account (one browser, several wallets). */
+const feelKey = (account: string | null) => `hm-live-feel-${account ?? "guest"}`;
+/** Messages kept per Mind in this browser: the newest ones. */
+const MAX_MSGS = 60;
 
-function readFeel(): Record<number, Feel> {
+function readFeel(key: string): Record<number, Feel> {
   try {
-    const f: Record<number, Feel> = JSON.parse(localStorage.getItem(FEEL_KEY) || "{}");
+    // the old key held every account's chats together: it can't be split, so it goes
+    localStorage.removeItem("hm-live-feel");
+    const f: Record<number, Feel> = JSON.parse(localStorage.getItem(key) || "{}");
     // Mood saved before it had a timestamp starts ageing from now.
     if (Object.values(f).some((x) => !x.ts)) {
       for (const x of Object.values(f)) x.ts ??= Date.now();
-      localStorage.setItem(FEEL_KEY, JSON.stringify(f));
+      localStorage.setItem(key, JSON.stringify(f));
     }
     return f;
   } catch {
@@ -377,11 +382,59 @@ function useLive(enabled: boolean): Game {
   const [unread, setUnread] = useState(0);
   // No indexer: notifications come from diffing consecutive chain snapshots of your Minds.
   const prevSnap = useRef<{ minds: Map<number, { unclaimed: number; state: string }>; orders: Map<number, number> } | null>(null);
+  // the exact on-chain prices (yocto), for deposits that must match them
+  const paramsYocto = useRef<chain.EconomyParamsOnChain | null>(null);
+  // The account the screen is for right now: late answers for another one are dropped.
+  const acctRef = useRef(accountId);
+  const refreshSeq = useRef(0);
+  const refreshShown = useRef(0);
+  // Order polls still running (stopped on sign-out, account change or unmount).
+  const polls = useRef(new Set<{ stop: boolean }>());
+  // Replies on their way, per Mind: the dots stay while any of them is still coming.
+  const working = useRef(new Map<number, number>());
+  const startThinking = useCallback((id: number) => {
+    working.current.set(id, (working.current.get(id) ?? 0) + 1);
+    setThinking(id);
+  }, []);
+  const stopThinking = useCallback((id: number) => {
+    const n = (working.current.get(id) ?? 1) - 1;
+    if (n > 0) working.current.set(id, n);
+    else working.current.delete(id);
+    setThinking((t) => (t !== id || n > 0 ? t : (working.current.keys().next().value ?? null)));
+  }, []);
+
+  // A different account (or none): nothing of the last one's may stay on screen.
+  useEffect(() => {
+    acctRef.current = accountId;
+    for (const p of polls.current) p.stop = true;
+    polls.current.clear();
+    working.current.clear();
+    prevSnap.current = null;
+    setChatLeft({});
+    setJobs([]);
+    setWallet(null);
+    setNotifs([]);
+    setUnread(0);
+    setThinking(null);
+    setFeel(enabled ? readFeel(feelKey(accountId)) : {});
+  }, [accountId, enabled]);
+  useEffect(
+    () => () => {
+      for (const p of polls.current) p.stop = true;
+    },
+    []
+  );
 
   const refresh = useCallback(async () => {
+    const seq = ++refreshSeq.current;
+    // dropped if the account changed meanwhile, or a later refresh already showed newer data
+    const stale = () => acctRef.current !== accountId || refreshShown.current > seq;
     // One view for the whole colony: public RPCs rate-limit per request.
     const snap = await chain.colonySnapshot();
+    if (stale()) return;
     const { params: p, treasury: tre, ghost_window_ms: gw, supply_left: left, services: s, listings: l } = snap;
+    refreshShown.current = seq;
+    paramsYocto.current = p;
     setParams({
       thoughtCost: y2n(p.thought_cost),
       guestMinPrice: y2n(p.guest_min_price),
@@ -436,6 +489,7 @@ function useLive(enabled: boolean): Game {
       gate.agentStatus(),
       chain.inputSchemas(s.map((x) => x.id)).catch(() => [] as (string | null)[]),
     ]);
+    if (stale()) return;
     const parsed: Record<number, gate.InputSchema> = {};
     forms.forEach((f, i) => {
       try {
@@ -473,13 +527,14 @@ function useLive(enabled: boolean): Game {
     );
     setTerms(Object.fromEntries(termList.map((t, i) => [s[i]?.id, t])));
     setJobs(myJobs.map(toJob));
-    setWallet(accountId ? y2n(await chain.accountBalance(accountId)) : null);
+    const bal = accountId ? y2n(await chain.accountBalance(accountId)) : null;
+    if (acctRef.current !== accountId) return;
+    setWallet(bal);
     setReady(true);
   }, [accountId]);
 
   useEffect(() => {
     if (!enabled) return;
-    setFeel(readFeel());
     refresh().catch((e) => {
       setError(errText(e));
       setReady(true); // show the screen (with the error) rather than spin forever
@@ -492,12 +547,14 @@ function useLive(enabled: boolean): Game {
     };
   }, [enabled, refresh]);
 
+  const readMine = useCallback(() => readFeel(feelKey(acctRef.current)), []);
   const updateFeel = useCallback((id: number, patch: Partial<Feel>) => {
     setFeel((f) => {
       const cur = f[id] ?? { ...FRESH, love: 0, msgs: [] };
-      const next = { ...f, [id]: { ...cur, ...patch } };
+      const p = patch.msgs && patch.msgs.length > MAX_MSGS ? { ...patch, msgs: patch.msgs.slice(-MAX_MSGS) } : patch;
+      const next = { ...f, [id]: { ...cur, ...p } };
       try {
-        localStorage.setItem(FEEL_KEY, JSON.stringify(next));
+        localStorage.setItem(feelKey(acctRef.current), JSON.stringify(next));
       } catch {
         /* ignore */
       }
@@ -508,11 +565,11 @@ function useLive(enabled: boolean): Game {
   // Age her mood to now, then apply a change (pet, reply, meal) and restamp it.
   const bumpMood = useCallback(
     (id: number, dHappy: number, dEnergy: number, extra: Partial<Feel> = {}) => {
-      const f = readFeel()[id];
+      const f = readMine()[id];
       const m = moodAt({ happy: f?.happy ?? FRESH.happy, energy: f?.energy ?? FRESH.energy, ts: f?.ts ?? Date.now() }, Date.now());
       updateFeel(id, { happy: Math.min(100, Math.max(10, m.happy + dHappy)), energy: Math.min(100, Math.max(0, m.energy + dEnergy)), ts: Date.now(), ...extra });
     },
-    [updateFeel]
+    [updateFeel, readMine]
   );
 
   const minds: MindRec[] = useMemo(
@@ -536,7 +593,8 @@ function useLive(enabled: boolean): Game {
           sleepPending: state === "asleep" && !m.asleep_since,
           ghost: m.ghost,
           ownerUnclaimed: y2n(m.owner_unclaimed),
-          lastMetabolismTs: Date.now(),
+          // the chain's own tick, so "sleeps in" counts to her next quiet thought, not a fresh one
+          lastMetabolismTs: m.last_metabolism_ts ? Math.floor(m.last_metabolism_ts / 1e6) : Date.now(),
           ...moodAt({ happy: f?.happy ?? FRESH.happy, energy: f?.energy ?? FRESH.energy, ts: f?.ts ?? now }, now),
           love: f?.love ?? 0,
           // never seed a chat with her last on-chain reply: it was written for someone else
@@ -575,14 +633,21 @@ function useLive(enabled: boolean): Game {
       setBusy(true);
       try {
         await f(signer);
-        await refresh();
-        return true;
       } catch (e) {
         setError(errText(e));
+        setBusy(false);
         return false;
+      }
+      // The transaction went through. A failed re-read afterwards must not look like a failed
+      // payment (the player would pay again): the next poll picks the new state up.
+      try {
+        await refresh();
+      } catch {
+        /* shown on the next refresh */
       } finally {
         setBusy(false);
       }
+      return true;
     },
     [signer, refresh]
   );
@@ -615,21 +680,23 @@ function useLive(enabled: boolean): Game {
       setError("Connect a wallet first.");
       return false;
     }
-    const cur = readFeel()[id]?.msgs ?? minds.find((m) => m.id === id)?.msgs ?? [];
+    const cur = readMine()[id]?.msgs ?? minds.find((m) => m.id === id)?.msgs ?? [];
     updateFeel(id, { msgs: [...cur, { who: "me", t: prompt }] });
-    setThinking(id);
+    startThinking(id);
     try {
       const r = await sendChat(accountId, signMessage, id, prompt);
-      bumpMood(id, MOOD.chat, -MOOD.replyEnergy, { msgs: [...(readFeel()[id]?.msgs ?? []), { who: "mind", t: r.reply, proof: r.proof ?? null, via: r.via ?? null }] });
+      if (acctRef.current !== accountId) return false; // another account now: not its chat
+      bumpMood(id, MOOD.chat, -MOOD.replyEnergy, { msgs: [...(readMine()[id]?.msgs ?? []), { who: "mind", t: r.reply, proof: r.proof ?? null, via: r.via ?? null }] });
       setChatLeft((c) => ({ ...c, [id]: r.left }));
       return true;
     } catch (e) {
+      if (acctRef.current !== accountId) return false;
       updateFeel(id, { msgs: cur }); // nothing was sent or charged: take the message back
       setError(errText(e));
       loadChatLeft(id);
       return false;
     } finally {
-      setThinking(null);
+      stopThinking(id);
     }
   };
 
@@ -641,7 +708,7 @@ function useLive(enabled: boolean): Game {
     if (!o) return false;
     const price = Math.max(o.price, params.guestMinPrice);
     const id = o.mindId;
-    const cur = readFeel()[id]?.msgs ?? minds.find((m) => m.id === id)?.msgs ?? [];
+    const cur = readMine()[id]?.msgs ?? minds.find((m) => m.id === id)?.msgs ?? [];
     updateFeel(id, { msgs: [...cur, { who: "me", t: `${o.title}: ${prompt}`, paid: price }] });
     let out: unknown;
     const ok = await send(async (s) => {
@@ -654,14 +721,18 @@ function useLive(enabled: boolean): Game {
     // A wallet may not hand back the new id: then it is your newest open job for this service.
     let jobId = chain.returnedNumber(out);
     if (jobId === null && accountId) jobId = (await chain.jobsOf(accountId).catch(() => [])).find((j) => j.service_id === serviceId && j.status === "Open")?.id ?? null;
-    if (jobId === null) return true;
-    setThinking(id);
+    if (jobId === null || acctRef.current !== accountId) return true;
+    const poll = { stop: false };
+    polls.current.add(poll);
+    startThinking(id);
     void (async () => {
       const giveUp = Date.now() + 15 * 60_000;
       for (;;) {
         await new Promise((r) => setTimeout(r, 4000));
+        if (poll.stop) return; // signed out, another account, or the game closed
         const j = await chain.getJob(jobId).catch(() => null);
-        const msgs = readFeel()[id]?.msgs ?? [];
+        if (poll.stop) return;
+        const msgs = readMine()[id]?.msgs ?? [];
         if (j && j.status === "Delivered") {
           bumpMood(id, MOOD.chat, -MOOD.replyEnergy, { msgs: [...msgs, { who: "mind", t: j.result ?? "" }] });
           break;
@@ -675,7 +746,8 @@ function useLive(enabled: boolean): Game {
           break;
         }
       }
-      setThinking(null);
+      polls.current.delete(poll);
+      stopThinking(id);
       refresh().catch(() => {});
     })();
     return true;
@@ -720,12 +792,14 @@ function useLive(enabled: boolean): Game {
       if (ok) bumpMood(id, MOOD.feedHappy, MOOD.feedEnergy);
       return ok;
     },
-    revive: (id) => send((s) => chain.revive(s, id, params.revivePrice)),
+    // the exact on-chain prices, as sales do: a float round trip could fall a yocto short
+    revive: (id) => send((s) => chain.revive(s, id, paramsYocto.current?.revive_price ?? chain.nearToYocto(params.revivePrice))),
     talk: (id, prompt) => talkOffChain(id, prompt),
     chatLeft,
     loadChatLeft,
-    buyCredits: async (near) => {
-      const ok = await send((s) => chain.buyChatCredits(s, near));
+    buyCredits: async (messages) => {
+      const per = paramsYocto.current?.guest_min_price ?? chain.nearToYocto(params.guestMinPrice);
+      const ok = await send((s) => chain.buyChatCredits(s, (BigInt(per) * BigInt(Math.max(1, Math.floor(messages)))).toString()));
       if (ok) setChatLeft({}); // re-read per Mind as the chat panels ask
       return ok;
     },

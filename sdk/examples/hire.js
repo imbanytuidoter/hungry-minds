@@ -2,6 +2,12 @@
 // account, waits for the result, rates it and takes back the storage deposit.
 //
 //   AGENT=my-agent.testnet CONTRACT=hungry-minds-8250f6.testnet node examples/hire.js "wallet" "check alice.testnet"
+//
+// The same over HTTP (x402, paid in wNEAR, no gas of your own): pass the contract you expect
+// to pay and a price cap, so a hostile server can't make you sign another payment.
+//   const { hireMind } = require("hungry-minds-agent/x402");
+//   await hireMind({ url: "https://<site>/api/agent/x402/12", contractId: process.env.CONTRACT,
+//                    accountId: process.env.AGENT, text: "check alice.testnet", maxPrice: "0.5" });
 
 const { MindAgent } = require("..");
 

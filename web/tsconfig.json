@@ -46,10 +46,11 @@
     ".next-live-mw9x0sl4/types/**/*.ts",
     ".next-live-mwaokmzm/types/**/*.ts",
     ".next-live-mwapv7ce/types/**/*.ts",
+    ".next-live-mwavu0bf/types/**/*.ts",
     ".next-preview/types/**/*.ts",
     ".next-qa/types/**/*.ts",
     "next-env.d.ts",
-    ".next-live-mwavu0bf/types/**/*.ts"
+    ".next-live-mwc3ynpc/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

@@ -13,9 +13,11 @@ function fakeRpc(jobs, owners) {
 }
 
 test("an agent bound to Mind 12 serves only jobs ordered from Mind 12", async () => {
-  fakeRpc({ 5: { id: 5, mind_id: 12, status: "Open" }, 6: { id: 6, mind_id: 99, status: "Open" }, 7: { id: 7, mind_id: 12, status: "Delivered" } }, { 12: "bob.testnet" });
+  fakeRpc({ 5: { id: 5, mind_id: 12, status: "Open", input: "check alice.testnet" }, 6: { id: 6, mind_id: 99, status: "Open" }, 7: { id: 7, mind_id: 12, status: "Delivered" } }, { 12: "bob.testnet" });
   const g = mindGuard({ contractId: "c.testnet", mindId: 12 });
-  assert.equal((await g.check({ mind_id: 12, job_id: 5 })).ok, true);
+  const five = await g.check({ mind_id: 12, job_id: 5, input: "a forged input" });
+  assert.equal(five.ok, true);
+  assert.equal(five.input, "check alice.testnet", "the on-chain order text, not the payload's");
   assert.match((await g.check({ mind_id: 99, job_id: 6 })).reason, /belongs to Mind #12/);
   assert.match((await g.check({ mind_id: 12, job_id: 6 })).reason, /another Mind/); // a forged mind_id
   assert.match((await g.check({ mind_id: 12, job_id: 8 })).reason, /not on chain/);

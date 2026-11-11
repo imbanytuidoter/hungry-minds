@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useGame } from "./GameProvider";
 import { ConnectButtons } from "./Header";
 import { stateOf, type MindRec } from "@/lib/game/engine";
-import type { Offer } from "@/lib/game/services";
+import { chargeOf, nearText, type Offer } from "@/lib/game/services";
 import { clipBytes, LIMITS } from "@/lib/game/bytes";
 import { JOB_DEPOSIT_NEAR, WALLET_KIND } from "@/lib/chain";
 import { FILE_LINK, FULL_RESULT, openFile, uploadFile, type AgentFile } from "@/lib/agentClient";
@@ -37,7 +37,7 @@ export default function ChatPanel({ mind, service, clearService }: { mind: MindR
   const own = mind.owner === g.account;
   const st = stateOf(mind);
   const canTalk = st !== "asleep" && st !== "ghost";
-  const price = service ? Math.max(service.price, g.params.guestMinPrice) : g.params.guestMinPrice;
+  const price = service ? chargeOf(service.price, g.params.guestMinPrice) : g.params.guestMinPrice;
   const thinking = g.thinking === mind.id;
 
   const live = g.mode === "live";
@@ -103,10 +103,10 @@ export default function ChatPanel({ mind, service, clearService }: { mind: MindR
   const note = own
     ? `Free for you · each reply costs ${mind.name} ${g.params.thoughtCost} NEAR of her food${leftNote}`
     : live && !service
-      ? `${g.params.guestMinPrice.toFixed(2)} NEAR per message from your chat credits · 90% to her owner, 10% protocol${leftNote}`
-      : `${price.toFixed(2)} NEAR per message · 90% to her owner, 10% protocol`;
+      ? `${nearText(g.params.guestMinPrice)} NEAR per message from your chat credits · 90% to her owner, 10% protocol${leftNote}`
+      : `${nearText(price)} NEAR per message · 90% to her owner, 10% protocol`;
   // Guests prepay credits in one approval; each message then needs no wallet at all.
-  const packs = [10, 50].map((n) => ({ n, near: Math.round(n * g.params.guestMinPrice * 1000) / 1000 }));
+  const packs = [10, 50].map((n) => ({ n, near: n * g.params.guestMinPrice }));
   const showPacks = live && !own && !service && !!g.account && left !== undefined && left < 5;
 
   return (
@@ -125,7 +125,7 @@ export default function ChatPanel({ mind, service, clearService }: { mind: MindR
       {service && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 16, background: "color-mix(in srgb, var(--surface) 70%, transparent)", fontSize: 13.5 }}>
           <span style={{ flex: 1 }}>
-            Ordering <b>{service.title}</b> · {service.price.toFixed(2)} NEAR / {service.unit}
+            Ordering <b>{service.title}</b> · {nearText(price)} NEAR / {service.unit}
           </span>
           <button className="btn-link" onClick={clearService}>
             Cancel
@@ -152,7 +152,7 @@ export default function ChatPanel({ mind, service, clearService }: { mind: MindR
           >
             <MsgText t={m.t} />
             {m.via ? <span style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--info)", marginTop: 6 }}>via her agent {m.via}</span> : null}
-            {m.paid ? <span style={{ display: "block", fontSize: 11, opacity: 0.8, marginTop: 2 }}>paid {m.paid.toFixed(2)} NEAR</span> : null}
+            {m.paid ? <span style={{ display: "block", fontSize: 11, opacity: 0.8, marginTop: 2 }}>paid {nearText(m.paid)} NEAR</span> : null}
             {m.proof && (
               <a
                 href={m.proof.verify_url}
@@ -188,8 +188,8 @@ signature ${m.proof.signature}` : "NEAR AI wrote this reply, but its signature w
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 14px", borderRadius: 16, background: "color-mix(in srgb, var(--surface) 70%, transparent)", fontSize: 13.5 }}>
           <span style={{ flex: 1, minWidth: 180 }}>{left === 0 ? "Buy chat credits to talk to her." : "Running low on chat credits."} One approval, then no wallet per message.</span>
           {packs.map((p) => (
-            <button key={p.n} className="btn-ghost pill" disabled={g.busy} onClick={() => void g.buyCredits(p.near).then((ok) => ok && loadChatLeft(mind.id))}>
-              {p.n} messages · {p.near} NEAR
+            <button key={p.n} className="btn-ghost pill" disabled={g.busy} onClick={() => void g.buyCredits(p.n).then((ok) => ok && loadChatLeft(mind.id))}>
+              {p.n} messages · {nearText(p.near)} NEAR
             </button>
           ))}
         </div>
@@ -252,14 +252,14 @@ signature ${m.proof.signature}` : "NEAR AI wrote this reply, but its signature w
           </label>
         )}
         <button className="btn-cta" style={{ padding: "0 18px" }} disabled={!canTalk || busy || (!draft.trim() && !service) || !formReady} onClick={send}>
-          {own || (live && !service) ? "Send" : `Send · ${price.toFixed(2)}`}
+          {own || (live && !service) ? "Send" : `Send · ${nearText(price)}`}
         </button>
       </div>
       <span style={{ fontSize: 12, color: "var(--muted)" }}>
         {g.mode === "demo"
           ? "Replies come from an AI model in her character (demo world: nothing is written on chain)."
           : service
-            ? `An order is a job: the contract holds your ${price.toFixed(2)} NEAR until she delivers${service.sla ? ` (due in ${service.sla})` : ""} and gives it back if she doesn't. It also holds a ${JOB_DEPOSIT_NEAR} NEAR storage deposit you get back when you close the order in Shop → My orders.`
+            ? `An order is a job: the contract holds your ${nearText(price)} NEAR until she delivers${service.sla ? ` (due in ${service.sla})` : ""} and gives it back if she doesn't. It also holds a ${JOB_DEPOSIT_NEAR} NEAR storage deposit you get back when you close the order in Shop → My orders.`
             : "No wallet popup per message: your wallet signs in to chat once a day, and what you use is settled on chain in batches from her food (or your chat credits)."}
       </span>
     </section>

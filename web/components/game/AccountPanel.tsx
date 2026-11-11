@@ -187,7 +187,7 @@ export default function AccountPanel({ mind, visit, toHatch }: { mind: MindRec |
                 ["Thoughts", mind.thoughts.toLocaleString("en-US")],
               ]}
             />
-            {mind.owner === g.account && <Restyle mind={mind} />}
+            {mind.owner === g.account && <Restyle key={mind.id} mind={mind} />}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {mind.natures.map((t, i) => (
                 <span key={t} style={{ padding: "5px 10px", borderRadius: 999, background: TRAIT_BG[i % TRAIT_BG.length], fontSize: 12, fontWeight: 600 }}>

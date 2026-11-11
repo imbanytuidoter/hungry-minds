@@ -20,7 +20,7 @@ import {
 } from "./engine";
 import { NATURES, type Look, type Tone } from "./look";
 import { demoReply } from "./replies";
-import { SERVICES, type Category, type Offer } from "./services";
+import { needsAgent, SERVICES, type Category, type Offer } from "./services";
 
 export const DEMO_ACCOUNT = "you.testnet";
 
@@ -249,7 +249,7 @@ export function chat(w: World, id: number, prompt: string, paid: number, now: nu
   const m = get(x, id);
   must(payer !== m.owner, "use think() for your own Mind");
   must(!m.ghost, "this Mind is a ghost");
-  must(m.asleepSince === 0, "this Mind is asleep: feed her to wake her (anyone can)");
+  must(m.asleepSince === 0 && m.balance >= P.thoughtCost, "this Mind is asleep: feed her to wake her (anyone can)");
   if (payer === x.account) x = spend(x, paid);
   const s = guestSplit(paid);
   x = withMind(x, id, (m) => {
@@ -257,6 +257,8 @@ export function chat(w: World, id: number, prompt: string, paid: number, now: nu
     return {
       ...m,
       balance,
+      // as think(): too little food left for one more thought, and she sleeps
+      asleepSince: balance < P.thoughtCost ? now : 0,
       ownerUnclaimed: round(m.ownerUnclaimed + s.owner),
       thoughts: m.thoughts + 1,
       happy: Math.min(100, m.happy + 4),
@@ -307,6 +309,8 @@ export function orderService(w: World, serviceId: number, prompt: string, paid: 
   const s = w.services.find((x) => x.id === serviceId);
   must(s, "no such service");
   must(s!.live, "this service is paused");
+  // colony.rs order_service: data categories are for real agents only, and the demo has none
+  must(!needsAgent(s!.cat), "this service needs an agent: order it with order_job once one is plugged in");
   must(paid >= Math.max(s!.price, P.guestMinPrice), "chat deposit below the guest minimum");
   const x = chat(w, s!.mindId, prompt, paid, now);
   return { ...x, services: x.services.map((y) => (y.id === serviceId ? { ...y, orders: y.orders + 1, fed: round(y.fed + guestSplit(paid).owner) } : y)) };
@@ -334,7 +338,10 @@ export function buyMind(w: World, id: number, now: number): World {
   let x = spend(w, price);
   const sales = { ...x.sales };
   delete sales[id];
-  // The seller's unclaimed cut is settled to them on the way out; the buyer starts at 0.
+  // colony.rs buy_mind: the seller is paid the price plus their unclaimed cut (as on any
+  // transfer), and the buyer starts at 0. You never buy from yourself, so the seller is a
+  // colony keeper with no wallet in this world: both amounts leave with them, so clearing her
+  // unclaimed here is that payout, not a loss.
   x = withMind({ ...x, sales }, id, (m) => ({ ...m, owner: x.account, ownerUnclaimed: 0 }));
   return log(x, `Bought ${m.name}`, -price, now);
 }
@@ -354,7 +361,7 @@ export function claim(w: World, id: number, now: number): World {
 export function reap(w: World, id: number, now: number): World {
   const m = get(w, id);
   must(!m.ghost, "already a ghost");
-  must(m.asleepSince !== 0 && now - m.asleepSince > demoClock.ghostMs, "not ready to reap — still within the sleep window");
+  must(m.asleepSince !== 0 && now - m.asleepSince >= demoClock.ghostMs, "not ready to reap — still within the sleep window");
   const x = withMind(w, id, (m) => ({ ...m, ghost: true, ownerUnclaimed: round(m.ownerUnclaimed + MINT_SPLIT.reserve) }));
   return log(x, `${m.name} became a ghost`, 0, now);
 }

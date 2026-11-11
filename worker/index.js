@@ -19,7 +19,7 @@ try {
 
 const { connect, keyStores, KeyPair, utils } = require("near-api-js");
 const { systemPrompt } = require("./personality");
-const { cleanReply, withTimeout } = require("./reply");
+const { cleanReply, clipUtf8, phrasebookAllowed, withTimeout } = require("./reply");
 const { phrasebookReply } = require("./phrasebook");
 const { startChatServer, secretFor } = require("./chat-server");
 const { makeJobRunner, makeSleepRecorder } = require("./jobs");
@@ -104,8 +104,14 @@ function askLLM(mind, prompt, history = []) {
 
 // The colony model as a plain tool (no Mind voice): the gateway uses it to turn a request in
 // plain words into a call to one of an MCP agent's tools.
+// The planner's prompts carry text from connected agents (tool lists, schemas) and players;
+// a hard cap on the whole prompt keeps one call from hogging the queue the paid replies share.
+const MAX_PLAN_SYSTEM_BYTES = 32_000;
+const MAX_PLAN_USER_BYTES = 8_000;
 function planLLM(system, user) {
   if (!LLM) return Promise.reject(new Error("no model configured"));
+  system = clipUtf8(system, MAX_PLAN_SYSTEM_BYTES);
+  user = clipUtf8(user, MAX_PLAN_USER_BYTES);
   const run = llmQueue.then(() => planOnce(system, user, 0));
   llmQueue = run.catch(() => {});
   return run;
@@ -335,9 +341,15 @@ async function handle(account, view, req, attempts) {
       try {
         reply = await askLLM(who, req.prompt);
       } catch (e) {
-        console.error(`#${req.request_id} ${LLM.name} failed, using phrasebook:`, e.message);
+        console.error(`#${req.request_id} ${LLM.name} failed:`, e.message);
       }
     }
+    // A guest's thought (by_owner false: a paid chat or service order) holds the guest's escrow,
+    // which `respond` releases to the owner. A canned phrasebook line must never "deliver" it:
+    // with a model configured and failing, the guest's thought is left unanswered, so it times
+    // out on chain and the guest gets the whole escrow back. The owner's own thought (paid from
+    // her food) may still get the phrasebook, and with no model at all it is her only voice.
+    if (!reply && !phrasebookAllowed({ hasModel: !!LLM, byOwner: req.by_owner })) throw new Error("the model gave no reply; a guest's paid thought is never answered from the phrasebook (it times out and refunds the guest)");
     if (!reply) reply = cleanReply(phrasebookReply(who, req.prompt, req.request_id));
     if (!reply) throw new Error("empty reply");
 
@@ -361,6 +373,12 @@ async function handle(account, view, req, attempts) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A stray rejection in an HTTP handler or a fire-and-forget promise must not kill the worker
+// (Node's default for an unhandled rejection is to exit): log it and keep serving.
+process.on("unhandledRejection", (e) => {
+  console.error("unhandled rejection (kept running):", e?.stack || e);
+});
 
 main().catch((e) => {
   console.error(e);

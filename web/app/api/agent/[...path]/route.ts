@@ -3,6 +3,8 @@
 // questions, upload and download files; and the public x402 door to a Mind's services
 // (/api/agent/x402/<mind id>, see worker/x402.js).
 
+import { KB, readCapped, tooLarge } from "@/lib/readBody";
+
 const CHAT_SERVER_URL = process.env.CHAT_SERVER_URL || "http://127.0.0.1:8788";
 
 async function forward(req: Request, path: string[]) {
@@ -13,11 +15,14 @@ async function forward(req: Request, path: string[]) {
     const v = req.headers.get(h);
     if (v) fwd[h] = v;
   }
+  // a file upload carries up to 6 MB as base64 (~8 MB); everything else is small JSON
+  const body = req.method === "POST" ? await readCapped(req, path[0] === "upload" ? 9 * KB * KB : 64 * KB) : undefined;
+  if (body === null) return tooLarge();
   try {
     const res = await fetch(url, {
       method: req.method,
       headers: fwd,
-      body: req.method === "POST" ? await req.text() : undefined,
+      body,
       // connecting or testing waits for the agent itself
       signal: AbortSignal.timeout(200_000),
     });

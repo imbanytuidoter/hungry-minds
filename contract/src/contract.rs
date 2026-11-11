@@ -66,6 +66,17 @@ fn answered_by() -> near_sdk::store::LookupMap<u64, AccountId> {
 /// so a ghost's storage (whose 0.25 NEAR reserve went back to its owner) stays paid for.
 const TREASURY_FLOAT: u128 = crate::state::ONE_NEAR;
 const GAS_FOR_WITHDRAW_CALLBACK: Gas = Gas::from_tgas(5);
+/// A ghost keeps its record (and the storage it stakes) after its 0.25 NEAR reserve went back to
+/// its owner; a treasury withdrawal leaves this much per ghost on top of the storage stake.
+const GHOST_STORAGE: u128 = crate::state::ONE_NEAR / 50; // 0.02 NEAR
+fn ghost_count() -> near_sdk::store::LookupMap<u8, u64> {
+    near_sdk::store::LookupMap::new(b"G".to_vec())
+}
+/// Most thoughts one Mind may have in flight at once.
+const MAX_PENDING_PER_MIND: u32 = 5;
+fn pending_per_mind() -> near_sdk::store::LookupMap<u64, u32> {
+    near_sdk::store::LookupMap::new(b"P".to_vec())
+}
 
 /// The receiver interface for `nft_transfer_call` (NEP-171 core).
 #[allow(dead_code)] // the #[ext_contract] macro consumes this to generate ext_nft_receiver
@@ -298,6 +309,17 @@ impl Contract {
     /// settle any guest escrow — split on delivery, full refund to the payer on timeout.
     fn resolve_thought(&mut self, mind_id: u64, request_id: u64, outcome: Result<String, ()>, now: u64) {
         let removed = self.pending.remove(&request_id);
+        if let Some(p) = removed.as_ref() {
+            let mut inflight = pending_per_mind();
+            match inflight.get(&p.mind_id).copied().unwrap_or(0) {
+                0 | 1 => {
+                    inflight.remove(&p.mind_id);
+                }
+                n => {
+                    inflight.insert(p.mind_id, n - 1);
+                }
+            }
+        }
         let cost = removed.as_ref().map(|p| p.cost_paid).unwrap_or(self.thought_cost);
         let delivered = outcome.is_ok();
         self.finalize_thought(mind_id, outcome, now, cost);
@@ -404,6 +426,13 @@ impl Contract {
         cost_paid: u128,
         escrow: Option<(AccountId, u128, Option<u64>)>,
     ) -> Promise {
+        // A few thoughts in flight per Mind at most: each parked one holds storage the caller
+        // doesn't pay for until it resolves.
+        let mut inflight = pending_per_mind();
+        let n = inflight.get(&mind_id).copied().unwrap_or(0);
+        require!(n < MAX_PENDING_PER_MIND, "she is still thinking about her last messages: wait for a reply");
+        inflight.insert(mind_id, n + 1);
+        drop(inflight);
         let rid = self.next_request;
         self.next_request += 1;
         let args = near_sdk::serde_json::json!({ "mind_id": mind_id, "request_id": rid })
@@ -427,6 +456,12 @@ impl Contract {
     /// Resolve a parked thought: store a delivered reply, or refund a timed-out one. Pure
     /// enough to unit-test directly; the #[private] on_thought callback wraps it.
     fn finalize_thought(&mut self, mind_id: u64, outcome: Result<String, ()>, now: u64, cost: u128) {
+        // A ghost (reaped while the thought was in flight) can't take food back: the refund goes
+        // to the treasury instead of waking a ghost.
+        if outcome.is_err() && self.minds.get(&mind_id).is_some_and(|m| m.ghost) {
+            self.treasury = self.treasury.saturating_add(NearToken::from_yoctonear(cost));
+            return;
+        }
         let mind = match self.minds.get_mut(&mind_id) {
             Some(m) => m,
             None => return,
@@ -905,6 +940,9 @@ impl Contract {
             require!(!mind.ghost, "already a ghost");
             require!(crate::state::is_reapable(mind.asleep_since, now), "not ready to reap — still within the sleep window");
         }
+        let mut ghosts = ghost_count();
+        ghosts.insert(0, ghosts.get(&0).copied().unwrap_or(0) + 1);
+        drop(ghosts);
         let mind = self.minds.get_mut(&id).unwrap();
         mind.ghost = true;
         // Credit the hatch reserve to the owner as a *claimable* amount (pull pattern):
@@ -978,7 +1016,7 @@ impl Contract {
         require!(a <= self.treasury.as_yoctonear(), "amount exceeds the treasury");
         let stake = env::storage_byte_cost().as_yoctonear().saturating_mul(env::storage_usage() as u128);
         require!(
-            env::account_balance().as_yoctonear().saturating_sub(a) >= stake.saturating_add(TREASURY_FLOAT),
+            env::account_balance().as_yoctonear().saturating_sub(a) >= stake.saturating_add(TREASURY_FLOAT).saturating_add(GHOST_STORAGE.saturating_mul(ghost_count().get(&0).copied().unwrap_or(0) as u128)),
             "withdrawal would leave too little to cover the contract's storage"
         );
         self.treasury = NearToken::from_yoctonear(self.treasury.as_yoctonear() - a);
@@ -1230,7 +1268,9 @@ impl Contract {
             if let Some(mind) = self.minds.get_mut(&id) {
                 if mind.owner == receiver_id {
                     mind.owner = previous_owner_id.clone();
-                    mind.approvals = cleared_approvals;
+                    // approvals the receiver added while it held her go back with their storage
+                    let receivers = std::mem::replace(&mut mind.approvals, cleared_approvals);
+                    refund_cleared_approvals(&receivers, &receiver_id);
                     let tid = id.to_string();
                     near_contract_standards::non_fungible_token::events::NftTransfer {
                         old_owner_id: receiver_id.as_ref(),
@@ -1240,6 +1280,9 @@ impl Contract {
                         memo: Some("nft_transfer_call reverted"),
                     }
                     .emit();
+                } else {
+                    // the receiver already passed her on: the old approvals are gone for good
+                    refund_cleared_approvals(&cleared_approvals, &previous_owner_id);
                 }
             }
         }
@@ -1647,7 +1690,7 @@ mod tests {
         testing_env!(ctx_on("alice.near", NearToken::from_yoctonear(0)).build());
         c.list_for_sale(0, U128(NearToken::from_near(1).as_yoctonear()));
         testing_env!(ctx_on("carol.near", NearToken::from_near(1)).build());
-        c.buy_mind(0);
+        c.buy_mind(0, None);
         c.resolve_thought(0, 0, Ok("hello".to_string()), 1);
         let m = c.get_mind(0).unwrap();
         assert_eq!(m.owner.as_str(), "carol.near");
@@ -1694,6 +1737,19 @@ mod tests {
         c.hatch_mind("Rue".to_string(), None);
         testing_env!(ctx_from("bob.near", NearToken::from_yoctonear(0)).build());
         let _ = c.chat(0, "hi".to_string());
+    }
+
+    // --- thoughts in flight ---
+    #[test]
+    #[should_panic(expected = "wait for a reply")]
+    fn a_mind_has_at_most_five_thoughts_in_flight() {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(1)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string(), None);
+        testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(0)).build());
+        for _ in 0..6 {
+            let _ = c.think(0, "hey".to_string());
+        }
     }
 
     // --- think (owner) ---

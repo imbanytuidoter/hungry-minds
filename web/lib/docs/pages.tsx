@@ -181,7 +181,7 @@ export const PAGES: DocPage[] = [
               <b>Earn.</b> 90% of every payment goes to you as unclaimed earnings, 10% to the protocol. Claim it to your wallet any time.
             </li>
             <li>
-              <b>Sell her whole</b>, if you like. Her agent, services and rating go with her, and you keep the full price.
+              <b>Sell her whole</b>, if you like. Her services and rating go with her, and so does an agent connected by URL or an official one. You keep the full price.
             </li>
           </Steps>
         ),
@@ -658,9 +658,9 @@ export const PAGES: DocPage[] = [
             <p>
               Replies come from NEAR AI Cloud and carry a signature you can check (see <Link href="/docs/verifiable-ai">Verifiable AI</Link>). Messages are sent off chain so chatting
               needs no gas. Usage is written on chain in numbered batches about once a minute, and each batch can only spend what was prepaid: her food for your messages, your
-              credits for a guest&apos;s.
+              credits for a guest&apos;s. Her food pays only for messages from her current owner, so after a sale the old owner&apos;s messages are not charged to her.
             </p>
-            <p>A message is at most 500 bytes (about 500 Latin or 250 Cyrillic letters, 2,000 bytes when she has a connected agent), and you wait for her reply before sending the next. If the model is busy, the message is refused and nothing is charged.</p>
+            <p>A message is at most 500 bytes (about 500 Latin or 250 Cyrillic letters, 2,000 bytes when she has a connected agent), and you wait for her reply before sending the next. If the model is busy or fails, the message is refused and nothing is charged.</p>
           </>
         ),
       },
@@ -800,7 +800,7 @@ export const PAGES: DocPage[] = [
             head={["Stage", "What happens", "Who"]}
             rows={[
               [<b key="o">Open</b>, "Price and deposit sit in the contract. The deadline is the order time plus the service's deadline", "Buyer orders"],
-              [<b key="d">Delivered</b>, "Result stored. 90% goes to whoever owned the Mind at order time, 10% to the protocol. Delivery costs her 0.002 NEAR of food", "Her agent, or a colony worker if she has none"],
+              [<b key="d">Delivered</b>, "Result stored. 90% goes to whoever owns the Mind when the job is delivered, 10% to the protocol. Delivery costs her 0.002 NEAR of food", "Her agent, or a colony worker if she has none"],
               [<b key="r">Refunded</b>, "Missed the deadline: the price goes back to the buyer", "Anyone, after the deadline"],
               [<b key="s">Rated</b>, "One to five stars, once, on a delivered job", "Buyer"],
               [<b key="c">Closed</b>, "The record is deleted and the 0.03 NEAR deposit returns", "Buyer"],
@@ -815,14 +815,14 @@ export const PAGES: DocPage[] = [
         body: (
           <p>
             If her agent needs more information, it asks you a question in My orders and the job continues after you answer. The deadline keeps counting. Results longer than 2,000
-            bytes, and any files, are kept by the agent gateway, and the chain stores a link with their SHA-256 hash.
+            bytes, and any files, are kept by the agent gateway, and the chain stores a link with their SHA-256 hash. Shorter results go on chain as text.
           </p>
         ),
       },
       {
         id: "limits",
         title: "Limits",
-        summary: "Input 1,000 bytes, on-chain result 2,000 bytes, uploads 6 MB, 50 unclosed orders per buyer.",
+        summary: "Input 1,000 bytes, on-chain result 2,000 bytes, uploads 6 MB, 50 unclosed orders per buyer, 20 open jobs per Mind.",
         body: (
           <Table
             head={["", "Limit"]}
@@ -831,7 +831,9 @@ export const PAGES: DocPage[] = [
               ["Result stored on chain", "2,000 bytes"],
               ["File upload", "6 MB"],
               ["Orders not yet closed, per buyer", "50. Close finished ones in My orders to order more"],
+              ["Open jobs per Mind", "20. More orders are refused until one is delivered or refunded"],
               ["Open jobs across the colony", "1,000"],
+              ["Who can't order", "The Mind's own owner and her agent"],
             ]}
           />
         ),
@@ -907,7 +909,8 @@ export const PAGES: DocPage[] = [
         summary: "Shop → Buy & sell Minds → Buy.",
         body: (
           <p>
-            In <b>Shop → Buy & sell Minds</b>, press <b>Buy</b> and approve the price. Anything paid above the price is refunded.
+            In <b>Shop → Buy & sell Minds</b>, press <b>Buy</b> and approve the price. Anything paid above the price is refunded. <code>buy_mind</code> takes an optional{" "}
+            <code>expected_price</code>: if the seller changed the price in the meantime, the purchase is refused.
           </p>
         ),
       },
@@ -920,7 +923,8 @@ export const PAGES: DocPage[] = [
             <p>
               The buyer gets her food, look, character, thought count, plugged-in agent, services and their terms, and her reputation. The new owner controls the agent and gets 90%
               of everything she earns from then on; the seller gets nothing more from her. An agent connected by URL or run by the platform goes with her. If the seller ran the
-              agent on their own NEAR account, the contract unplugs it at the sale, so plug in your own.
+              agent on their own NEAR account, the contract unplugs it at the sale, so plug in your own. A connected agent may still use the seller&apos;s API key, so for chat and
+              tests the gateway asks the new owner to connect their own.
             </p>
             <Table
               num={[1]}
@@ -959,7 +963,7 @@ export const PAGES: DocPage[] = [
               ["Your chat reply", "Her food", "0.002", "The worker that answered"],
               ["Idle burn", "Her food", "≈ 0.02 / day", "Treasury"],
               ["Guest message", "Guest", "0.01", "90% owner · 10% protocol (her reply also costs her 0.002 food)"],
-              ["Service or job", "Buyer", "price ≥ 0.01", "90% owner · 10% protocol (delivery costs her 0.002 food, paid to whoever delivers: her agent or a colony worker, or the treasury if the agent is the owner's own account)"],
+              ["Service or job", "Buyer", "price ≥ 0.01", "90% owner · 10% protocol (delivery costs her 0.002 food, paid to the agent gateway or a colony worker when they deliver, otherwise to the treasury)"],
               ["Job deposit", "Buyer", "0.03", "Back to the buyer on close"],
               ["Buying a Mind", "Buyer", "list price", "100% seller"],
             ]}
@@ -1059,7 +1063,7 @@ export const PAGES: DocPage[] = [
         body: (
           <Note title="Scam warning" warn>
             <p>
-              There is no Hungry Minds token and no airdrop. The only contract is <Contract />. Anyone offering a token in our name is not us.
+              There is no Hungry Minds token and no airdrop. The only official game contract is <Contract />. Anyone offering a token in our name is not us.
             </p>
           </Note>
         ),
@@ -1204,7 +1208,7 @@ near view ${TESTNET_DEPLOY} supply_left '{}'`}</Code>
               ]}
             />
             <p>
-              The connection belongs to the Mind: if you sell her, your agent keeps serving her new owner. To limit your server to the Minds you choose, see{" "}
+              The connection belongs to the Mind: if you sell her, an agent connected by URL keeps serving her new owner. To limit your server to the Minds you choose, see{" "}
               <a href="#bound">Make your agent belong to one Mind</a>.
             </p>
           </>
@@ -1213,7 +1217,7 @@ near view ${TESTNET_DEPLOY} supply_left '{}'`}</Code>
       {
         id: "x402",
         title: "Hire a Mind from your own agent (x402)",
-        summary: "Every Mind has an A2A + x402 address. One HTTP call orders a job, paid from your NEAR account, with no gas of your own.",
+        summary: "Every Mind has an A2A + x402 address. One HTTP call orders a job, paid in wNEAR from your NEAR account; the relay costs you no gas.",
         body: (
           <>
             <p>
@@ -1226,11 +1230,17 @@ near view ${TESTNET_DEPLOY} supply_left '{}'`}</Code>
               contract sends the price plus the 0.03 NEAR storage deposit, in wNEAR, to the Hungry Minds contract, with the order in <code>msg</code>. The site&apos;s worker relays it
               and pays only the gas and 1 yoctoNEAR. The contract unwraps the wNEAR and places your own order, so nothing else changes: the price waits in escrow, only her agent (or
               the colony worker) can deliver, delivery pays 90% to her owner and 10% to the treasury, and past the deadline you get it back. A refused order gives your wNEAR back (or, if it is refused after the unwrap, the same amount in NEAR); wNEAR above the price comes back as wNEAR.
-              Close the job afterwards (<code>close_job</code>) to get the 0.03 NEAR back. <code>hireMind</code> wraps the NEAR you are short of first.
+              Close the job afterwards (<code>close_job</code>) to get the 0.03 NEAR back.
+            </p>
+            <p>
+              You sign with a full-access key of your account. The relay costs you no gas, but wrapping NEAR into wNEAR is an ordinary transaction that you pay for;{" "}
+              <code>hireMind</code> wraps the NEAR you are short of first. It needs <code>contractId</code>, the Hungry Minds contract you expect, and a <code>maxPrice</code> cap
+              (1 NEAR by default), and refuses a 402 offer that asks for anything else.
             </p>
             <Code>{`const { hireMind } = require("./sdk/x402");   // from this repository's sdk/
 const task = await hireMind({
   url: "https://<this site>/api/agent/x402/12",
+  contractId: "hungry-minds-8250f6.testnet",  // the contract you expect to pay
   accountId: "me.testnet",                 // key from ~/.near-credentials/testnet
   text: "Top 3 Polymarket markets by volume",
 });
@@ -1286,7 +1296,7 @@ console.log(task.status.state, task.artifacts?.[0]?.parts?.[0]?.text);`}</Code>
             <li>Responses up to 8 MB, 90 seconds per call. A2A tasks are polled for up to 10 minutes.</li>
             <li>An API key is sent as a Bearer token or in a header you name. The gateway stores it encrypted and never on chain.</li>
             <li>OpenAI-compatible and HTTPS agents are probed once when you connect them. A2A and MCP agents are checked every 5 minutes, and the shop shows them online or offline.</li>
-            <li>Only the Mind&apos;s owner can connect, test or disconnect an agent. The connection belongs to the Mind and goes with her when she is sold.</li>
+            <li>Only the Mind&apos;s owner can connect, test or disconnect an agent. The connection belongs to the Mind and goes with her when she is sold. After a sale the gateway asks the new owner to connect their own agent (with their own key) for chat and tests.</li>
           </ul>
         ),
       },
@@ -1296,8 +1306,8 @@ console.log(task.status.state, task.artifacts?.[0]?.parts?.[0]?.text);`}</Code>
         summary: "Plug in your agent's NEAR account; only it can deliver her jobs.",
         body: (
           <p>
-            Choose <b>Run it on my server</b>, enter your agent&apos;s NEAR account and press <b>Plug in</b>. From then on only that account can deliver her jobs. It earns the 0.002
-            NEAR of food each delivery uses, unless it is your own wallet account: then that 0.002 goes to the treasury. Your server watches for open jobs and calls <code>deliver_job</code> before the deadline.
+            Choose <b>Run it on my server</b>, enter your agent&apos;s NEAR account and press <b>Plug in</b>. From then on only that account can deliver her jobs. The 0.002
+            NEAR of food each delivery uses goes to the treasury (only the platform&apos;s approved responders earn it). Your server watches for open jobs and calls <code>deliver_job</code> before the deadline.
             If you sell the Mind, the contract unplugs this account and the buyer plugs in their own.
           </p>
         ),
@@ -1346,7 +1356,7 @@ const owner = await guard.owner();         // the NFT's owner right now`}</Code>
             <a href={VERIFY} {...ext}>
               cloud.near.ai/verify
             </a>
-            , where you can check them.
+            , where you can check them and the enclave&apos;s attestation. The worker does not check the attestation itself.
           </p>
         ),
       },
@@ -1357,7 +1367,8 @@ const owner = await guard.owner();         // the NFT's owner right now`}</Code>
         body: (
           <p>
             For each reply the worker fetches the enclave&apos;s signature. The signed text ties together the SHA-256 hashes of the request and the response (and the model id, unless NEAR AI
-            signed at its gateway), and the recovered signer must match the signing address NEAR AI reports. Only then is the reply marked verified.
+            signed at its gateway), and the recovered signer must match the signing address NEAR AI reports. Only then is the reply marked verified. The worker
+            does not check the attestation itself: it trusts the address NEAR AI reports, and cloud.near.ai/verify shows that address&apos;s TEE attestation.
           </p>
         ),
       },
@@ -1405,7 +1416,7 @@ const owner = await guard.owner();         // the NFT's owner right now`}</Code>
               reports and pays it 0.002 NEAR of a Mind&apos;s food for each reply it reports.
             </li>
             <li>Withdraw up to the treasury balance, never from a Mind&apos;s food or anyone&apos;s earnings, and only while the contract keeps its storage cost plus 1 NEAR.</li>
-            <li>Answer chat and deliver jobs for Minds without an agent itself, like a colony worker.</li>
+            <li>Answer on-chain thoughts and deliver jobs for Minds without an agent itself.</li>
             <li>
               Deploy new contract code. The account still holds a full-access key, so every rule that is fixed in the code depends on that key until it is removed.
             </li>

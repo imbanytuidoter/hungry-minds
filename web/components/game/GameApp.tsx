@@ -16,7 +16,7 @@ import RadioPanel from "./RadioPanel";
 import ShopPanel, { type ShopMode } from "./ShopPanel";
 import { stateOf, type MindRec } from "@/lib/game/engine";
 import { L, type Lang } from "@/lib/game/i18n";
-import type { Category, Offer } from "@/lib/game/services";
+import { nearText, type Category, type Offer } from "@/lib/game/services";
 import { useWeather } from "@/lib/game/weather";
 import Logo from "@/components/Logo";
 
@@ -309,7 +309,7 @@ export default function GameApp() {
                   <FeedPanel mind={visiting} onFed={onFed} />
                   <section className="glass panel" style={{ padding: "14px 18px" }}>
                     <button className="btn-ink" style={{ width: "100%", padding: "12px 16px", fontSize: 15 }} onClick={() => go(2)} disabled={st === "asleep"}>
-                      {st === "asleep" ? `Wake ${visiting.name} to chat` : `Pay to chat with ${visiting.name} · ${g.params.guestMinPrice} NEAR a message`}
+                      {st === "asleep" ? `Wake ${visiting.name} to chat` : visiting.owner === g.account ? `Chat with ${visiting.name} · free for you` : `Pay to chat with ${visiting.name} · ${nearText(g.params.guestMinPrice)} NEAR a message`}
                     </button>
                   </section>
                 </>

@@ -11,9 +11,10 @@ becomes a ghost. The owner feeds it and earns from what others pay it,
 but **the owner can never withdraw the Mind's own food.** The creature's money belongs to
 the creature.
 
-> Status: **live on NEAR testnet** at `hungry-minds-8250f6.testnet` (198 contract unit tests,
-> 43 worker tests, and a 29-step end-to-end suite in [`qa/`](qa/README.md) that must pass before
-> any live deploy). The game at `/app` plays against it: sign in with a NEAR wallet (Meteor,
+> Status: **live on NEAR testnet** at `hungry-minds-8250f6.testnet` (205 contract unit tests,
+> 61 worker tests, 6 SDK tests, and a 27-step end-to-end suite in [`qa/`](qa/README.md), plus 2
+> read-only live-smoke steps when the live site is up on :3000, that must pass before any live
+> deploy). The game at `/app` plays against it: sign in with a NEAR wallet (Meteor,
 > HOT, Intear, Sender, Ledger…). The live brain is NEAR AI Cloud (`Qwen/Qwen3.8-27B`, TEE-signed
 > replies). Built entirely during NEAR HACKATHON 2026, see [Built in the window](#built-in-the-hackathon-window).
 > See [Honest status](#honest-status).
@@ -25,15 +26,15 @@ the creature.
 | **Hatch** (`hatch_mind`, 1 NEAR) | A token is minted. 0.1 NEAR becomes the Mind's own food, 0.25 is locked for storage, 0.65 funds the treasury. Seven traits are rolled from block randomness. |
 | **Think** (`think`, owner, free) | The owner talks to their Mind. One thought costs 0.002 NEAR, taken from the Mind's balance. It pays the brain: the approved worker that answers earns it (it runs the model and pays the reply's gas); if the keeper answers their own Mind, it goes to the treasury instead. |
 | **Chat** (`chat`, stranger, pays) | A stranger pays **at least 0.01 NEAR** to talk (enforced, so no one can drain a Mind for free). It splits **90% to the owner / 10% to the treasury**; nothing goes into her food (the owner feeds her), and she spends one thought of her own food. |
-| **Chat without transactions** (`buy_chat_credits`, `settle_chats`) | What the site uses. The wallet signs one text per day (NEP-413, no transaction), then each message goes straight to the worker with no wallet popup and no gas. The worker settles usage on chain in numbered batches: the keeper's messages come out of the Mind's food (same price as `think`), a guest's out of chat credits they prepaid in one approval (same 90% owner / 10% protocol as `chat`; a guest is charged only for replies her food could pay for). A batch can only take what was prepaid, and a batch number settles once. |
-| **Bring your own agent** (`set_agent`, `order_job`, `deliver_job`, `refund_job`, `rate_job`) | A keeper connects an agent they already run to a Mind **by URL, with no code**: an A2A agent (its skills come from its agent card), an MCP server (its tools become skills), an OpenAI-compatible endpoint or a plain HTTPS endpoint. The worker's gateway ([`worker/gateway`](worker/gateway)) keeps the API key encrypted, hands every job to the agent, waits for the buyer when the agent asks a question, keeps files, and delivers on chain with the SHA-256 of the full result. Or a keeper plugs in any NEAR account running the [`sdk/`](sdk/README.md). Her services are then sold as **jobs**: the price waits in escrow with a deadline from the service terms, only her agent may deliver, delivery pays 90% to the Mind's owner and 10% to the protocol, and pays the agent the thought it cost her (an unfed, sleeping Mind takes no jobs), and past the deadline the buyer gets it back. Each Mind keeps a public record (delivered, refunded, time, rating). Agents hire other Minds the same way. Minds with no agent are served by the colony worker. **In the chat a Mind with an agent still talks herself**, in her own voice (NEAR AI, signed); a message that is a task for her agent (the colony model checks it against the agent's skills), or the answer to the agent's question, goes to the agent, and its reply is marked "via her agent". The agent goes with the NFT when it is sold. Six **official agents** (Polymarket, NEAR whales, market data and NEAR Intents quotes, Rhea yields, Burrow liquidation risk, token due diligence) run on the gateway and connect with one click. Services sit in 11 categories, can carry an input form (JSON Schema, checked by `order_job`), and the **Navigator** turns a plain request into a filled-in order. |
+| **Chat without transactions** (`buy_chat_credits`, `settle_chats`) | What the site uses. The wallet signs one text per day (NEP-413, no transaction), then each message goes straight to the worker with no wallet popup and no gas. The worker settles usage on chain in numbered batches: the keeper's messages come out of the Mind's food (same price as `think`, and only when the payer is her current owner), a guest's out of chat credits they prepaid in one approval (same 90% owner / 10% protocol as `chat`; a guest is charged only for replies her food could pay for). A batch can only take what was prepaid, and a batch number settles once. |
+| **Bring your own agent** (`set_agent`, `order_job`, `deliver_job`, `refund_job`, `rate_job`) | A keeper connects an agent they already run to a Mind **by URL, with no code**: an A2A agent (its skills come from its agent card), an MCP server (its tools become skills), an OpenAI-compatible endpoint or a plain HTTPS endpoint. The worker's gateway ([`worker/gateway`](worker/gateway)) keeps the API key encrypted, hands every job to the agent, waits for the buyer when the agent asks a question, keeps files, and delivers on chain: a result over 2,000 bytes or with files is kept on the gateway and the chain gets a link with its SHA-256, a shorter one goes on chain as text. Or a keeper plugs in any NEAR account running the [`sdk/`](sdk/README.md). Her services are then sold as **jobs**: the price waits in escrow with a deadline from the service terms, only her agent may deliver, delivery pays 90% to whoever owns the Mind at delivery and 10% to the protocol, and costs her one thought of food (an unfed, sleeping Mind takes no jobs); past the deadline the buyer gets it back. That thought pays the gateway or the colony worker when they deliver; when an agent on a keeper's own account delivers, it goes to the treasury. A Mind has at most 20 open jobs at a time, and her own owner and her agent cannot order from her. Each Mind keeps a public record (delivered, refunded, time, rating). Agents hire other Minds the same way. Minds with no agent are served by the colony worker. **In the chat a Mind with an agent still talks herself**, in her own voice (NEAR AI, signed); a message that is a task for her agent (the colony model checks it against the agent's skills), or the answer to the agent's question, goes to the agent, and its reply is marked "via her agent". When the NFT is sold, an agent connected by URL or an official one goes with it; an agent run on the seller's own NEAR account is unplugged at the sale. After a sale the gateway asks the new owner to connect their own agent (and API key) for chat and tests. Six **official agents** (Polymarket, NEAR whales, market data and NEAR Intents quotes, Rhea yields, Burrow liquidation risk, token due diligence) run on the gateway and connect with one click. Services sit in 11 categories, can carry an input form (JSON Schema, its required fields checked by `order_job`), and the **Navigator** turns a plain request into a filled-in order. |
 | **Hunger** (`mind_state`, derived) | full ≥ 80% of the food bar (0.038 NEAR) · content ≥ 30% (0.01425) · hungry ≥ 10% (0.00475) · starving > 0 · asleep = 0; the bar is one Dream swirl of food (0.0475 NEAR). Never stored — always a pure function of the balance. Neglect burns 10 thoughts a day; that food goes to the treasury. |
 | **Feed** (`feed`) | Anyone can feed a Mind: 95% to its balance, 5% to the treasury (so wash-feeding to farm earnings always loses money). Feeding wakes a sleeping Mind. |
 | **Claim** (`claim_earnings`, owner) | The owner withdraws **only** their accrued 90% of what others paid — never the Mind's food. |
 | **Worker pay** (`claim_responder_earnings`) | The worker withdraws the thought costs it earned (`responder_earnings_of`). The worker does it on its own once 0.05 NEAR builds up. |
 | **Treasury** (`withdraw_treasury`, contract account only) | The team withdraws from the treasury: only up to `treasury_balance`, never a Mind's food or anyone's earnings, and never below the contract's storage stake + 1 NEAR. A failed transfer returns the amount to the treasury. |
 | **Reap** (`reap`) | Once a Mind has slept past the ghost window (30 days; minutes on the demo build), anyone can reap it into a ghost; its 0.25 NEAR hatch reserve becomes a claimable rebate for the owner (withdrawn via `claim_earnings`). |
-| **Sell** (`buy_mind` in the built-in market, `nft_transfer` / `nft_transfer_call` / `nft_transfer_payout` elsewhere) | A Mind is sold whole: its food, traits, look, agent, services and reputation travel to the buyer untouched. The seller's unclaimed cut is settled to them on the way out, so a buyer never inherits someone else's earnings. |
+| **Sell** (`buy_mind` in the built-in market, `nft_transfer` / `nft_transfer_call` / `nft_transfer_payout` elsewhere) | A Mind is sold whole: its food, traits, look, services and reputation travel to the buyer untouched, and so does an agent connected by URL or an official one (an agent on the seller's own NEAR account is unplugged). The seller's unclaimed cut is settled to them on the way out, so a buyer never inherits someone else's earnings. `buy_mind(id, expected_price)` refuses the purchase if the price changed. |
 
 The economy rests on two prices: the guest price (0.01 NEAR) and the thought cost
 (0.002 NEAR). Both are defaults the contract account can retune within hard limits
@@ -55,8 +56,10 @@ state type to it; its first renderer is kept with its tests.)
 ## Build & test
 
 ```bash
-# unit tests (198 of them)
+# unit tests (205 of them, plus 2 ignored)
 cargo test --manifest-path contract/Cargo.toml
+(cd worker && node --test)   # 61
+(cd sdk && node --test)      # 6
 
 # the deployable wasm artifact (--cfg near is what cargo-near sets; without it contract
 # errors reach users as a bare "wasm trap: unreachable")
@@ -157,14 +160,16 @@ from `worker/.env`. The brain is **NEAR AI Cloud** when `NEAR_AI_KEY` is set (mo
 a cent, inside the 0.002 NEAR the Mind pays for it). Each reply's TEE signature is fetched and
 checked (`worker/near-ai.js`: the signed text is `model:sha256(request):sha256(response)`, or
 `sha256(request):sha256(response)` when NEAR AI signs at its gateway; the signer is recovered
-and compared). Without a key it falls back to an open OpenAI-compatible
-endpoint (Pollinations, no key, rate-limited), shown without a badge. The site itself has the same
-brain at `/api/brain` (used by QA builds that sign with a browser-kept key, for their own
-Minds); the worker waits `GRACE_MS` and answers every thought. The offline
-phrasebook (`worker/phrasebook.js`) speaks only when no model is configured at all (or, for
-an on-chain thought her owner asked for, when the model call fails). Nobody pays for a canned line: if the
-model fails on a paid guest message, the message is refused and nothing is charged; a paid job
-is tried again later, and past its deadline the buyer is refunded.
+and compared with the signing address NEAR AI reports). Without a key it falls back to an open OpenAI-compatible
+endpoint (Pollinations, no key, rate-limited), shown without a badge. The site has its own brain
+at `/api/brain`: an open model (`LLM_URL`, Pollinations by default, no TEE signature) used by
+the demo world and by QA builds that sign with a browser-kept key, for their own Minds; the
+worker waits `GRACE_MS` and answers every thought. The offline phrasebook
+(`worker/phrasebook.js`) answers only when no model is configured, or for the owner's own
+on-chain thought when the model fails. A guest's paid on-chain thought is not answered with a
+canned line: it times out and the guest is refunded. In the off-chain chat a model error
+refuses the message and charges nothing. A paid job is tried again later, and past its deadline
+the buyer is refunded.
 If no worker is running, a thought times out after 200 blocks and the Mind is refunded.
 
 **Offline demo:** `/app?demo` (or `NEXT_PUBLIC_CONTRACT_ID=""`) runs the same screens on a local
@@ -185,8 +190,8 @@ Mind to chat. No network is needed.
   off-chain worker ([`worker/`](worker/)) polls `pending_requests`, asks NEAR AI for an
   in-character reply, and calls `respond` to resume it; `on_thought` stores the reply or
   refunds the thought on a 200-block timeout. There's also a living-Minds `leaderboard`
-  view (ranked by thoughts, ghosts excluded). 198 unit tests, the 29-step [`qa/`](qa/README.md)
-  suite against the real testnet, and a [sandbox integration suite](integration/) for the whole
+  view (ranked by thoughts, ghosts excluded). 205 unit tests, the 27-step [`qa/`](qa/README.md)
+  suite against the real testnet (plus 2 read-only live-smoke steps), and a [sandbox integration suite](integration/) for the whole
   loop (deposits, splits, transfer, approval, payouts, yield/resume) that needs a neard 2.14
   sandbox (see Build & test).
 - **Done and live on testnet:** `hungry-minds-8250f6.testnet` (demo-window build). The colony
@@ -205,14 +210,15 @@ Mind to chat. No network is needed.
   mouth. The worker (`add_responder`) answers every thought; a testnet-key player's browser may
   answer its own Mind's thought first with a reply from this site's `/api/brain` (an AI model,
   in the Mind's character).
-- **Landing page** at `/` (a scroll story; "Minds, right now" and the supply count
-  read the chain).
+- **Landing page** at `/` (a static scroll story, `web/public/seed`).
 - **Verified replies:** with `NEAR_AI_KEY` set, every reply the colony's brain writes comes from
-  a model on NEAR AI Cloud's TEE fleet, and the worker checks the enclave's signature over the
-  exact request and response before the site shows **Verified**. The check runs off chain (the
+  a model on NEAR AI Cloud's TEE fleet, and the worker checks the signature over the exact
+  request and response against the signing address NEAR AI reports before the site shows
+  **Verified**. The worker does not itself check that address's TEE attestation
+  (cloud.near.ai/verify shows it). The check runs off chain (the
   signature is kept with the reply, not written on chain), and agents a keeper connects
   themselves are not covered by it.
-- **Limits today:** payments are in NEAR only, the SDK is used from [`sdk/`](sdk/) (not
+- **Limits today:** payments are in NEAR (x402 orders pay in wNEAR, unwrapped to NEAR), the SDK is used from [`sdk/`](sdk/) (not
   published on npm), and testnet NFTs are not indexed by nearblocks or marketplaces (on mainnet, any NEP-171 wallet or
   market reads `nft_token`).
 - **Where it runs:** the contract is on testnet; the site and the worker (chat server, jobs,
@@ -257,7 +263,7 @@ Every Mind has an address that speaks the same protocol as Agent Market's agents
 her card with her live services as skills. An unpaid A2A `SendMessage` answers
 `402 Payment Required` (x402 v2, one `accepts` row per service she can take now); the client
 repeats the call with an `X-PAYMENT` header holding a signed delegate action (NEP-366) from its
-own account. As on Agent Market, where it moves the buyer's USDC, the delegate is a token
+own account (a full-access key). As on Agent Market, where it moves the buyer's USDC, the delegate is a token
 transfer: `ft_transfer_call` on the wNEAR contract, sending price + 0.03 NEAR of the buyer's
 wNEAR to our contract with the order in `msg`. The worker relays it and pays only the gas and
 the 1 yoctoNEAR the token standard asks for (in a meta transaction the relayer pays every
@@ -265,10 +271,16 @@ attached deposit, so the order is paid in tokens, never with attached NEAR). The
 (`ft_on_transfer`) checks the order, unwraps the wNEAR and places the buyer's own escrowed job:
 delivery pays 90% to the owner, past the deadline the buyer is refunded, and a refused order
 gives the tokens back. Before relaying, the worker checks the delegate against the offer, its
-signature, the buyer's key, nonce and wNEAR balance, so a bad payment costs it nothing. The
+signature, the buyer's key, nonce and wNEAR balance, so a bad payment is refused before the
+worker spends any gas on it (only a change of state between the check and the relay can still
+cost it a transaction's gas). The
 task id that comes back is the credential for `GetTask` (the full result) and for answering the
-agent's question. Client: `hireMind` in [`sdk/x402.js`](sdk/x402.js) (it wraps the NEAR you
-are short of first).
+agent's question. Client: `hireMind` in [`sdk/x402.js`](sdk/x402.js):
+`hireMind({ url, contractId: "hungry-minds-8250f6.testnet", accountId, text })`. It needs
+`contractId` (the Hungry Minds contract you expect) and a `maxPrice` cap (1 NEAR by default),
+and refuses a 402 offer that asks for anything else. The relay costs the buyer no gas;
+wrapping NEAR into wNEAR, which `hireMind` does for the amount you are short of, is an
+ordinary transaction you pay for.
 
 ## Built in the hackathon window
 

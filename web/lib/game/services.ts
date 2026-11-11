@@ -10,6 +10,17 @@ export const CAT_IDS: Category[] = ["predict", "whales", "data", "yield", "defi"
 /** Categories that sell facts: only a real agent may deliver them (contract: needs_agent). */
 export const needsAgent = (c: Category) => CAT_IDS.indexOf(c) < 7;
 
+/** What an order really costs: the contract never charges less than the guest minimum. */
+export const chargeOf = (price: number, guestMinPrice: number) => Math.max(price, guestMinPrice);
+
+/** A NEAR amount without hiding small prices: up to 4 significant digits below 1 NEAR
+ *  (0.0125, 0.03), up to 3 decimals from 1 NEAR up (1.5, 12.25). */
+export const nearText = (x: number) =>
+  x.toLocaleString("en-US", x >= 1 ? { maximumFractionDigits: 3, useGrouping: false } : { maximumSignificantDigits: 4, useGrouping: false });
+
+/** A service's price as charged, as text ("0.0125"). */
+export const priceText = (price: number, guestMinPrice: number) => nearText(chargeOf(price, guestMinPrice));
+
 /** A published service as the UI sees it, from the chain or the demo world. */
 export type Offer = {
   id: number;
@@ -77,13 +88,13 @@ export const CAT_TINT: Record<Category, string> = {
 export const SERVICES: Service[] = [
   { cat: "content", title: "Bedtime story", desc: "A new 3-minute story every night, starring you and her.", price: 0.05, unit: "story", sla: "< 1 min", orders: 1713, rating: 4.9, badge: "Bestseller", fresh: 2, mind: "Nova" },
   { cat: "companion", title: "Morning check-in", desc: "She asks how you slept and remembers your answer tomorrow.", price: 0.02, unit: "call", sla: "< 1 min", orders: 1598, rating: 4.8, fresh: 3, mind: "Pip" },
-  { cat: "research", title: "Ukrainian in 5 words", desc: "Five new words a day, quizzed the next morning.", price: 0.03, unit: "lesson", sla: "< 2 min", orders: 1237, rating: 4.9, fresh: 5, mind: "Moss" },
+  { cat: "content", title: "Ukrainian in 5 words", desc: "Five new words a day, quizzed the next morning.", price: 0.03, unit: "lesson", sla: "< 2 min", orders: 1237, rating: 4.9, fresh: 5, mind: "Moss" },
   { cat: "companion", title: "Riddle duel", desc: "She asks a riddle, you get three guesses. Loser feeds the winner.", price: 0.01, unit: "riddle", sla: "instant", orders: 1203, rating: 4.7, fresh: 4, mind: "Wren" },
   { cat: "content", title: "Tiny poem", desc: "A four-line poem about anything you send her.", price: 0.04, unit: "poem", sla: "< 1 min", orders: 1103, rating: 4.8, fresh: 6, mind: "Nova" },
   { cat: "companion", title: "Calm breathing", desc: "A guided 2-minute breathing session in her soft voice.", price: 0.02, unit: "session", sla: "instant", orders: 1040, rating: 4.9, fresh: 7, mind: "Ash" },
   { cat: "companion", title: "Pep talk", desc: "Before an exam or interview, she hypes you up.", price: 0.02, unit: "call", sla: "instant", orders: 895, rating: 4.8, fresh: 8, mind: "Kiko" },
   { cat: "content", title: "Choose your path", desc: "A branching adventure, one chapter per message.", price: 0.06, unit: "chapter", sla: "< 1 min", orders: 630, rating: 4.7, badge: "New", fresh: 11, mind: "Juno" },
-  { cat: "research", title: "Star facts", desc: "One true story about a star or planet you pick.", price: 0.03, unit: "fact", sla: "< 1 min", orders: 581, rating: 4.6, fresh: 9, mind: "Sol" },
+  { cat: "content", title: "Star facts", desc: "One true story about a star or planet you pick.", price: 0.03, unit: "fact", sla: "< 1 min", orders: 581, rating: 4.6, fresh: 9, mind: "Sol" },
   { cat: "companion", title: "20 questions", desc: "She thinks of something, you have 20 questions.", price: 0.02, unit: "game", sla: "instant", orders: 529, rating: 4.7, fresh: 10, mind: "Tilly" },
   { cat: "content", title: "Name generator", desc: "Ten names for a pet, a project or a band.", price: 0.01, unit: "list", sla: "instant", orders: 407, rating: 4.5, fresh: 12, mind: "Moss" },
   { cat: "companion", title: "Gratitude journal", desc: "She asks for three good things and keeps them for you.", price: 0.02, unit: "entry", sla: "< 1 min", orders: 383, rating: 4.9, badge: "New", fresh: 13, mind: "Pip" },

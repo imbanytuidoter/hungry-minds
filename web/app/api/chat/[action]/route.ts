@@ -1,17 +1,21 @@
 // Same-origin door to the worker's chat server (worker/chat-server.js), which listens on
 // localhost only: sign in once, then chat with no transaction per message.
 
+import { KB, readCapped, tooLarge } from "@/lib/readBody";
+
 const CHAT_SERVER_URL = process.env.CHAT_SERVER_URL || "http://127.0.0.1:8788";
 const ACTIONS = new Set(["session", "chat", "allowance"]);
 
 async function forward(req: Request, action: string) {
   if (!ACTIONS.has(action)) return Response.json({ error: "not found" }, { status: 404 });
   const url = `${CHAT_SERVER_URL}/${action}${new URL(req.url).search}`;
+  const body = req.method === "POST" ? await readCapped(req, 64 * KB) : undefined;
+  if (body === null) return tooLarge();
   try {
     const res = await fetch(url, {
       method: req.method,
       headers: { "content-type": "application/json" },
-      body: req.method === "POST" ? await req.text() : undefined,
+      body,
       // a reply waits for the model, which may be queued behind a rate limit
       signal: AbortSignal.timeout(180_000),
     });

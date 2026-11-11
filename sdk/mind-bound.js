@@ -17,7 +17,18 @@
 //   // in your HTTPS handler (the gateway POSTs { input, skill, mind_id, job_id, buyer, ... }):
 //   const ok = await guard.check(body);
 //   if (!ok.ok) return { error: ok.reason };      // the gateway refunds the buyer at the deadline
+//   const input = ok.job ? ok.input : body.input; // a job: the buyer's ON-CHAIN order text
 //   const owner = await guard.owner();            // the NFT's current owner, if you need it
+//
+// Use the returned `input` (the job's on-chain input) for a job's first turn, never the
+// payload's `input`: the job id proves which job was paid, not that the text sent with it is
+// the text the buyer ordered. (Later turns of the same job carry the buyer's answers to your
+// question, which are not on chain; the gateway relays them.)
+//
+// Chat: a payload with no job id is a chat message, and its mind_id is only what the caller
+// says. `allowChat` is true by default, so such messages pass whenever mind_id matches; that
+// is fine for free small talk, but an agent that does costly or private work should pass
+// `allowChat: false` and serve only ordered, on-chain jobs.
 
 const DEFAULT_RPC = { testnet: "https://near-testnet.drpc.org", mainnet: "https://free.rpc.fastnear.com" };
 
@@ -45,8 +56,9 @@ async function mindOwner({ contractId, mindId, network = "testnet", rpc }) {
 
 /**
  * A guard for an agent that belongs to one Mind.
- * check(payload) → { ok: true, job } when the payload's job was ordered on chain from this Mind,
- * else { ok: false, reason }. Chat messages (no job id) pass only when mind_id matches; that
+ * check(payload) → { ok: true, job, input } when the payload's job was ordered on chain from
+ * this Mind (`input` is job.input, the on-chain order text: use it, not payload.input, for the
+ * job's first turn), else { ok: false, reason }. Chat messages (no job id) pass only when mind_id matches; that
  * field comes from the caller, so a chat message is not proven: pass `allowChat: false` if your
  * agent should only ever do paid, ordered work.
  */
@@ -59,7 +71,7 @@ function mindGuard({ contractId, mindId, network = "testnet", rpc, allowChat = t
     async check(payload = {}) {
       if (Number(payload.mind_id) !== mindId) return { ok: false, reason: `this agent belongs to Mind #${mindId}` };
       if (payload.job_id === undefined || payload.job_id === null) {
-        return allowChat ? { ok: true, job: null } : { ok: false, reason: "this agent only takes ordered jobs" };
+        return allowChat ? { ok: true, job: null, input: null } : { ok: false, reason: "this agent only takes ordered jobs" };
       }
       // The gateway sees a job as soon as it is ordered (optimistic), a final read may lag by a
       // block or two: read optimistic, and once more after a moment if it is not there yet.
@@ -71,7 +83,7 @@ function mindGuard({ contractId, mindId, network = "testnet", rpc, allowChat = t
       if (!job) return { ok: false, reason: `job ${payload.job_id} is not on chain` };
       if (Number(job.mind_id) !== mindId) return { ok: false, reason: `job ${payload.job_id} was ordered from another Mind` };
       if (job.status !== "Open") return { ok: false, reason: `job ${payload.job_id} is ${String(job.status).toLowerCase()}` };
-      return { ok: true, job };
+      return { ok: true, job, input: job.input };
     },
   };
 }

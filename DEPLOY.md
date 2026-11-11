@@ -48,7 +48,9 @@ cd worker && npm ci
 node testnet-account.js hungry-minds-<suffix>.testnet           # faucet-funded account, key -> ~/.near-credentials
 node setup-testnet.js hungry-minds-<suffix>.testnet ../contract/target/wasm32-unknown-unknown/release/hungry_minds_contract.wasm <suffix>
 #   deploys, creates worker + two keeper accounts, hatches 6 Minds with looks,
-#   publishes 7 services, lists one Mind for sale
+#   publishes 7 services, lists one Mind for sale. Note: some of those demo services use
+#   categories that are now agent-only, so they need an agent on the Mind first (or pick
+#   categories 7-10)
 node smoke-colony.js  hungry-minds-<suffix>.testnet <suffix>     # set_look, list/unlist, pause
 node redeploy.js hungry-minds-<suffix>.testnet <wasm>            # new code, same state
 node reset-contract.js hungry-minds-<suffix>.testnet <wasm> <beneficiary>.testnet  # testnet only: wipe to 0 Minds, same id
@@ -138,7 +140,9 @@ near call hungry-minds.$ACC chat '{"id":0,"prompt":"hello"}' --accountId someone
 
 The worker account never takes a Mind's food. It calls `respond`, `settle_chats`, `deliver_job` and
 `refund_job`, and `settle` for a Mind that starved on idle burn (so her sleep is recorded and the ghost
-window starts; SLEEP=off turns that off), and pays the gas for all of them.
+window starts; SLEEP=off turns that off), and pays the gas for all of them. It also relays x402
+payments (signed delegate actions: it pays their gas and the 1 yoctoNEAR the token standard asks
+for) and registers the contract with wNEAR once.
 Keep the worker's and NEAR AI keys out of git (worker/.gitignore covers `.env`).
 
 ## 7. Point the web at it (goes live, no code change)
@@ -159,7 +163,8 @@ the off-chain chat (no transaction per message) and connecting an agent need it.
 else the site does is a transaction or a view on the contract, so it works with only the
 contract deployed; the worker answers those on chain wherever it runs.
 
-With `NEXT_PUBLIC_CONTRACT_ID` set, the game at `/app` reads the chain over RPC and the
-Connect-wallet button + hatch/feed/talk sign real transactions through NEAR Wallet Selector.
-Leave it empty and the site stays in preview (sample Minds) — judges can clone and see the art
-with no deploy, then set the var to go live.
+`NEXT_PUBLIC_CONTRACT_ID` unset: the game at `/app` plays the public testnet deploy
+(`hungry-minds-8250f6.testnet`), reads the chain over RPC, and the Connect-wallet button +
+hatch/feed/talk sign real transactions through NEAR Wallet Selector. Set to an account: the
+same, against that contract. Set to an empty string (`NEXT_PUBLIC_CONTRACT_ID=""`): the offline
+demo world, a local colony with no network (`/app?demo` does the same on any build).

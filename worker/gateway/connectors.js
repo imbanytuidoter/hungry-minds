@@ -34,6 +34,34 @@ function authHeaders(conn, secret) {
 
 const clip = (s) => (s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + "\n…" : s);
 
+// What an agent's tool list may put into one planner prompt: a tool's schema (or its argument
+// line) at most 4 KB, the whole tool list at most 24 KB. Agents are outside code; a server
+// listing megabytes of schema must not stall or crowd the colony model's shared queue.
+const MAX_SCHEMA_PROMPT = 4096;
+const MAX_TOOLS_PROMPT = 24_000;
+function clipText(s, max) {
+  s = String(s ?? "");
+  if (Buffer.byteLength(s, "utf8") <= max) return s;
+  let out = "";
+  let n = 0;
+  for (const ch of s) {
+    const b = Buffer.byteLength(ch, "utf8");
+    if (n + b > max - 3) break;
+    out += ch;
+    n += b;
+  }
+  return out + "…";
+}
+function schemaText(schema) {
+  let s;
+  try {
+    s = JSON.stringify(schema || {});
+  } catch {
+    s = "{}";
+  }
+  return clipText(s, MAX_SCHEMA_PROMPT);
+}
+
 // NEAR Agent Market (market.near.ai) puts every listed agent behind its own paid A2A
 // address, <handle>.market.near.ai: each call answers 402 until it is paid in USDC on
 // mainnet (x402). The gateway does not pay x402, so every job would fail and be refunded.
@@ -274,7 +302,7 @@ function firstJson(s) {
 
 async function planArgs(tool, text, plan) {
   const out = await plan(
-    `You fill in arguments for a tool call. Tool "${tool.name}": ${tool.description || ""}\nJSON schema of the arguments: ${JSON.stringify(tool.inputSchema || {})}\nAnswer with only the JSON object of arguments.`,
+    `You fill in arguments for a tool call. Tool "${clipText(tool.name, 200)}": ${clipText(tool.description || "", 1000)}\nJSON schema of the arguments: ${schemaText(tool.inputSchema)}\nAnswer with only the JSON object of arguments.`,
     text
   );
   return firstJson(out);
@@ -291,14 +319,17 @@ function fitsSchema(args, schema = {}) {
 
 /** A tool's arguments in one line for the router: name: type (required). */
 const argLine = (schema = {}) =>
-  Object.entries(schema.properties || {})
-    .map(([k, p]) => `${k}: ${p.type || "string"}${(schema.required || []).includes(k) ? " (required)" : ""}`)
-    .join(", ") || "none";
+  clipText(
+    Object.entries(schema?.properties || {})
+      .map(([k, p]) => `${k}: ${p?.type || "string"}${(Array.isArray(schema.required) ? schema.required : []).includes(k) ? " (required)" : ""}`)
+      .join(", ") || "none",
+    MAX_SCHEMA_PROMPT
+  );
 
 /** Picks the tool for a free-form chat message, or answers directly when no tool fits. */
 async function mcpChoose(tools, text, history, plan) {
   if (tools.length === 1 || !plan) return { tool: closestTool(tools, text).name };
-  const list = tools.map((t) => `- ${t.name}: ${(t.description || "").slice(0, 200)}\n  arguments: ${argLine(t.inputSchema)}`).join("\n");
+  const list = clipText(tools.map((t) => `- ${clipText(t.name, 200)}: ${(t.description || "").slice(0, 200)}\n  arguments: ${argLine(t.inputSchema)}`).join("\n"), MAX_TOOLS_PROMPT);
   const past = history.slice(-4).map((m) => `${m.role}: ${m.content.slice(0, 300)}`).join("\n");
   try {
     const out = await plan(
@@ -446,4 +477,4 @@ async function run(conn, secret, req, plan) {
   return { ...r, text: clip([...r.text, ...data].join("\n\n").trim()), files: r.files };
 }
 
-module.exports = { KINDS, discover, run, authHeaders, guessArgs, firstJson, fitsSchema, marketPaywall, MARKET_PAYWALL };
+module.exports = { KINDS, discover, run, authHeaders, guessArgs, firstJson, fitsSchema, marketPaywall, MARKET_PAYWALL, schemaText, argLine, clipText, MAX_SCHEMA_PROMPT };

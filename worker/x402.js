@@ -39,6 +39,30 @@ const WAIT_MS = 25_000; // a SendMessage waits this long for a quick delivery be
 const MAX_TIMEOUT_S = 600;
 const RELAYS_PER_MIN = 30;
 const MAX_USED = 10_000;
+// A buyer whose relayed order the contract refused anyway (something preflight could not
+// see) waits this long before the worker pays gas for them again.
+const REFUSED_BLOCK_MS = 10 * 60_000;
+const MAX_FORM_DEPTH = 64; // serde_json gives up at 128; well inside that
+
+/** Why serde_json (the contract) would refuse this form input that JSON.parse took, or null.
+ *  JSON.parse turns 1e400 into Infinity, keeps lone surrogate escapes ("\ud800") as broken
+ *  strings and nests as deep as asked; serde_json refuses all three. Pure: unit-tested. */
+function serdeRefuses(value) {
+  const walk = (v, depth) => {
+    if (depth > MAX_FORM_DEPTH) return `the JSON input nests deeper than ${MAX_FORM_DEPTH} levels`;
+    if (typeof v === "number") return Number.isFinite(v) ? null : "the JSON input has a number too large to store";
+    if (typeof v === "string") return v.isWellFormed() ? null : "the JSON input has a broken unicode escape (a lone surrogate)";
+    if (v && typeof v === "object") {
+      for (const [k, x] of Array.isArray(v) ? v.entries() : Object.entries(v)) {
+        if (typeof k === "string" && !k.isWellFormed()) return "the JSON input has a broken unicode escape (a lone surrogate)";
+        const why = walk(x, depth + 1);
+        if (why) return why;
+      }
+    }
+    return null;
+  };
+  return walk(value, 1);
+}
 
 const wrapOf = (network) => (network === "mainnet" ? "wrap.near" : "wrap.testnet");
 const b64json = (s) => JSON.parse(Buffer.from(String(s), "base64").toString("utf8"));
@@ -49,6 +73,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  *  { signed, sender, serviceId, input } or throws with the reason. Pure: unit-tested. */
 function checkPayment(headerValue, { contractId, network, text, rows }) {
   const wrap = wrapOf(network);
+  // JSON.stringify writes a lone surrogate as "\ud800", which the contract's serde refuses
+  // (the order would bounce after the worker paid the relay gas)
+  if (typeof text !== "string" || !text.isWellFormed()) throw new Error("the message text is not valid unicode (it has a lone surrogate)");
   let p;
   try {
     p = b64json(headerValue);
@@ -151,6 +178,7 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
   const used = new Set(); // delegates already relayed, as sender:key:nonce (the header's wording doesn't matter)
   const topNonce = new Map(); // sender:key -> the highest delegate nonce relayed (a lower one would fail on chain)
   const inFlight = new Set(); // one paid call per buyer at a time
+  const refusedUntil = new Map(); // buyer -> until when relays for them are paused (REFUSED_BLOCK_MS)
   const relays = []; // timestamps of the last minute's relays
   const tagOf = (jobId) => crypto.createHmac("sha256", secret).update(`x402:${contractId}:${jobId}`).digest("hex").slice(0, 24);
   const taskId = (jobId) => `${jobId}.${tagOf(jobId)}`;
@@ -318,6 +346,8 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
       } catch {
         return "this service takes its form as JSON input (see extra.input_schema)";
       }
+      const strict = serdeRefuses(v);
+      if (strict) return strict;
       for (const f of Array.isArray(schema.required) ? schema.required : []) {
         if (v?.[f] === undefined || v[f] === null || v[f] === "") return `missing field: ${f}`;
       }
@@ -369,7 +399,7 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
       }
       const out = await readBack(txHash, 75_000);
       if (out) return out;
-      throw new Error(`the transaction ${txHash} did not show up in time; it may still land, check it on the explorer`);
+      throw Object.assign(new Error(`the transaction ${txHash} did not show up in time; it may still land, check it on the explorer`), { unknown: true, txHash });
     }
   }
 
@@ -377,6 +407,7 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     const msg = params?.message || {};
     const text = textOf(msg);
     if (!text) return [400, rpcErr(rpcId, -32602, "the message has no text")];
+    if (!text.isWellFormed()) return [400, rpcErr(rpcId, -32602, "the message text is not valid unicode (it has a lone surrogate)")];
     if (Buffer.byteLength(text, "utf8") > MAX_INPUT) return [400, rpcErr(rpcId, -32602, `the message is longer than ${MAX_INPUT} bytes`)];
 
     // An answer to the agent's question continues a paid task: no new payment.
@@ -408,6 +439,8 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     }
     const row = rows.find((r) => r.extra.service_id === p.serviceId);
     if (used.has(p.dedupe)) return need("this payment was already used", rows);
+    const blockedFor = (refusedUntil.get(p.sender) || 0) - Date.now();
+    if (blockedFor > 0) return [429, rpcErr(rpcId, -32003, `your last paid order was refused by the contract after it was relayed; try again in ${Math.ceil(blockedFor / 60_000)} min`)];
     if (inFlight.has(p.sender)) return [429, rpcErr(rpcId, -32003, "one paid call at a time per account")];
     const t = Date.now();
     while (relays.length && relays[0] < t - 60_000) relays.shift();
@@ -428,12 +461,21 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
       const d = p.signed.delegateAction; // it reached the chain: this nonce is spent for this key
       topNonce.set(`${p.sender}:${keyOf(d).toString()}`, BigInt(d.nonce));
     } catch (e) {
+      // Sent, but the outcome is unknown (the RPC gave up, it may still land): not a refusal
+      // to pay, so no 402 that would invite paying again; 504 with the hash to look it up.
+      if (e.unknown) return [504, rpcErr(rpcId, -32005, String(e.message || e).slice(0, 300), { transaction: e.txHash, network: `near:${network}`, payer: p.sender })];
       if (e.rejected) used.delete(p.dedupe); // never reached the chain: the buyer may send it again
       return need(`the payment did not go through: ${String(e.message || e).slice(0, 300)}`, rows);
     } finally {
       inFlight.delete(p.sender);
     }
     const jobId = orderedJobId(outcome, p.sender);
+    if (jobId === null) {
+      // The worker paid the gas and the contract refused the order anyway (its tokens went
+      // back to the buyer): don't relay for this buyer again for a while.
+      refusedUntil.set(p.sender, Date.now() + REFUSED_BLOCK_MS);
+      if (refusedUntil.size > 5000) for (const [k, t] of refusedUntil) if (t < Date.now()) refusedUntil.delete(k);
+    }
     if (jobId === null) return need(`the order was refused and nothing was charged (a refusal after the unwrap is refunded in NEAR): ${failureOf(outcome, p.sender) || "no job was placed"}`, rows);
     console.log(`x402: ${p.sender} ordered job ${jobId} (service ${p.serviceId}, mind ${mindId}), tx ${outcome.transaction.hash}`);
 
@@ -462,14 +504,25 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     return [402, body, { "payment-required": toB64(body) }];
   }
 
-  function rpcErr(id, code, message) {
-    return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
+  function rpcErr(id, code, message, data) {
+    return { jsonrpc: "2.0", id: id ?? null, error: { code, message, ...(data ? { data } : {}) } };
   }
 
   async function route(req, res, url, readBody) {
+    // serialize first, then the head: a body that can't be serialized, or a response whose
+    // head already went out, must not throw inside this async handler
     const out = (code, body, headers = {}) => {
+      if (res.headersSent) return res.destroy?.();
+      let text;
+      try {
+        text = JSON.stringify(body);
+      } catch {
+        code = 500;
+        text = '{"error":"server error"}';
+        headers = {};
+      }
       res.writeHead(code, { "content-type": "application/json", ...headers });
-      res.end(JSON.stringify(body));
+      res.end(text);
     };
     const m = /^\/agent\/x402\/(\d+)(\/\.well-known\/agent-card\.json)?$/.exec(url.pathname);
     if (!m) return out(404, { error: "not found" });
@@ -492,4 +545,4 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
   return { route, card, isRegistered };
 }
 
-module.exports = { makeX402, checkPayment, signatureOk, orderedJobId, failureOf, JOB_DEPOSIT, wrapOf };
+module.exports = { makeX402, checkPayment, serdeRefuses, signatureOk, orderedJobId, failureOf, JOB_DEPOSIT, wrapOf };

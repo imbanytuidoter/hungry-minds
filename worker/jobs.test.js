@@ -4,13 +4,18 @@ const { makeJobRunner, makeSleepRecorder } = require("./jobs");
 
 const settle = () => new Promise((r) => setTimeout(r, 20));
 
-function rig(answers) {
+const COST = "2000000000000000000000"; // 0.002 NEAR
+const deadline = () => String((BigInt(Date.now()) + 600_000n) * 1_000_000n);
+function rig(answers, { state = "content", balance = "90000000000000000000000" } = {}) {
   const calls = [];
-  const job = { id: 7, mind_id: 1, service_id: 3, input: "a joke", buyer: "b.testnet", deadline: String((BigInt(Date.now()) + 600_000n) * 1_000_000n) };
+  const job = { id: 7, mind_id: 1, service_id: 3, input: "a joke", buyer: "b.testnet", deadline: deadline() };
   const view = async (m) => {
     if (m === "open_jobs") return calls.some((c) => c.methodName === "deliver_job") ? [] : [job];
     if (m === "get_service") return { id: 3, title: "Joke", unit: "joke", category: 8 };
-    if (m === "open_job_count") return 0;
+    if (m === "open_job_count") return 1;
+    if (m === "params") return { thought_cost: COST };
+    if (m === "live_state") return state;
+    if (m === "live_balance") return balance;
     return null;
   };
   const account = { functionCall: async (c) => calls.push(c) };
@@ -18,6 +23,51 @@ function rig(answers) {
   const runner = makeJobRunner({ account, view, contractId: "c", answer: async () => answers[i++] ?? "" });
   return { runner, calls, asked: () => i };
 }
+
+test("the model is not asked for a job her food can't pay, nor while she sleeps", async () => {
+  const hungry = rig(["a joke"], { balance: "1000" });
+  await hungry.runner.tick();
+  await settle();
+  assert.equal(hungry.asked(), 0, "no model call for a hungry Mind");
+  assert.equal(hungry.calls.length, 0);
+  const sleeping = rig(["a joke"], { state: "asleep" });
+  await sleeping.runner.tick();
+  await settle();
+  assert.equal(sleeping.asked(), 0, "no model call for a sleeping Mind");
+});
+
+test("a job result is clipped to 2000 bytes, never mid-character", async () => {
+  const { runner, calls } = rig(["ї".repeat(1500)]); // 3000 bytes
+  await runner.tick();
+  await settle();
+  const r = calls.find((c) => c.methodName === "deliver_job").args.result;
+  assert.equal(r, "ї".repeat(1000));
+  assert.equal(Buffer.byteLength(r), 2000);
+});
+
+test("every open job is found past the first page, and a failing one doesn't block the rest", async () => {
+  // open_jobs skips from_index over ALL open ids, then filters (agent = none), then takes 50,
+  // so a page can be short in the middle of the list
+  const all = Array.from({ length: 120 }, (_, i) => ({ id: i, mind_id: i, service_id: 3, input: `q${i}`, buyer: "b.testnet", deadline: deadline(), colony: i % 3 !== 0 }));
+  const asked = [];
+  const view = async (m, a) => {
+    if (m === "open_job_count") return all.length;
+    if (m === "open_jobs") return all.slice(a.from_index || 0).filter((j) => j.colony).slice(0, Math.min(a.limit ?? 50, 50));
+    if (m === "get_service") return { id: 3, title: "Q", unit: "answer", category: 8 };
+    if (m === "params") return { thought_cost: COST };
+    if (m === "live_state") return "content";
+    if (m === "live_balance") return "90000000000000000000000";
+    return [];
+  };
+  const failing = { functionCall: async () => { throw new Error("rpc down"); } };
+  const runner = makeJobRunner({ account: failing, view, contractId: "c", answer: async (_m, p) => (asked.push(p), "ok") });
+  await runner.tick();
+  await settle();
+  const ids = new Set(asked.map((p) => Number(/q(\d+)$/.exec(p)[1])));
+  assert.equal(asked.length, ids.size, "no job asked twice in one pass");
+  assert.equal(ids.size, all.filter((j) => j.colony).length, "every colony job is tried, the last ones included");
+  assert.ok(ids.has(119));
+});
 
 test("a job whose model failed is not delivered, and is not retried at once", async () => {
   const { runner, calls, asked } = rig([""]);

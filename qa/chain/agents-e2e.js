@@ -3,7 +3,7 @@
 //      "Wallet check-up" service with a 5-minute deadline
 //   2. buyer alice-q1103 orders it as a job (price + 0.03 deposit in escrow)
 //   3. the agent (SDK + examples/wallet-checkup) reads the chain and delivers
-//   4. money moves exactly: NFT owner +90%, protocol +10%, agent earns the thought
+//   4. money moves exactly: NFT owner +90%, protocol +10%, an SDK agent on its own account earns nothing from her food (only platform responders do)
 //   5. buyer rates 5 and closes (deposit back); reputation updated
 //   6. agent to agent: the agent hires a Mind with no agent (worker serves it)
 //   7. the worker can't deliver for a Mind with an agent (contract refuses)
@@ -83,7 +83,8 @@ async function main() {
   const earned1 = BigInt(await agent.earnings());
   ok(Math.abs(N(m1.owner_unclaimed) - N(before.mind.owner_unclaimed) - 0.018) < 1e-6, "NFT owner got 90% of 0.02", `+${(N(m1.owner_unclaimed) - N(before.mind.owner_unclaimed)).toFixed(4)}`);
   ok(N(m1.balance) < N(before.mind.balance), "nothing went into her food (only the thought was spent)", `${N(before.mind.balance).toFixed(4)} -> ${N(m1.balance).toFixed(4)}`);
-  ok(N((earned1 - before.agentEarned).toString()) === 0.002, "the agent earned the thought (0.002)", N((earned1 - before.agentEarned).toString()));
+  // her food never becomes the earnings of an account the keeper names: the thought goes to the treasury
+  ok(earned1 === before.agentEarned, "an agent on its own account earns nothing from her food", N((earned1 - before.agentEarned).toString()));
   ok(m1.thought_count === before.mind.thought_count + 1, "her thought counted", `${before.mind.thought_count} -> ${m1.thought_count}`);
 
   // 5. rate + close

@@ -101,7 +101,7 @@ export function GetAMind({ onHatch, onBuy, compact = false }: { onHatch: () => v
           <b>Buy a grown Mind</b>
           <span>
             {forSale.length
-              ? `${forSale.length} for sale, from ${fmt(forSale[0].price)} NEAR. She comes with her food, agent, services and rating.`
+              ? `${forSale.length} for sale, from ${fmt(forSale[0].price)} NEAR. She comes with her food, services and rating.`
               : "None for sale right now. See the marketplace, new listings show up there."}
           </span>
         </span>
@@ -131,7 +131,7 @@ export function SoldCard({ sold, onHatch, onBuy, onClose }: { sold: Sold[]; onHa
               <GlossyMind tone={x.mind.look.tone} mood="happy" eyes={x.mind.look.eyes} hat={x.mind.look.hat} outfit={x.mind.look.outfit} />
             </span>
           ))}
-          <span className="hm-sold-badge">Sold</span>
+          <span className="hm-sold-badge">{allPriced ? "Sold" : "New owner"}</span>
         </div>
         <span className="hm-sold-title">{title}</span>
         <span className="hm-sold-sub">
@@ -140,14 +140,16 @@ export function SoldCard({ sold, onHatch, onBuy, onClose }: { sold: Sold[]; onHa
               She now belongs to <span className="mono">{one.mind.owner}</span>.
             </>
           ) : (
-            <>They now belong to their buyers.</>
+            <>They now belong to their new owners.</>
           )}{" "}
+          {/* The chain keeps no sale record: a Mind that was listed and changed hands was most
+              likely bought, but a plain transfer looks the same, so no amount is promised. */}
           {allPriced && total > 0 ? (
             <>
-              The <b>{fmt(total)} NEAR</b> went straight to your wallet, with what she had earned for you before the sale.
+              {sold.length === 1 ? "She was listed" : "They were listed"} for <b>{fmt(total)} NEAR</b>{sold.length === 1 ? "" : " in all"}. A buyer&apos;s payment goes straight to your wallet. What she had earned for you before was paid to you too.
             </>
           ) : (
-            <>The sale price went straight to your wallet, with what she had earned for you before the sale.</>
+            <>What she had earned for you before the transfer was paid to your wallet.</>
           )}{" "}
           From now on her earnings are her new owner&apos;s.
         </span>

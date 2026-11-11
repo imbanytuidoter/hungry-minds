@@ -123,6 +123,8 @@ export type MindOnChain = {
   balance: string; // yoctoNEAR
   born_ts: number;
   last_think_ts: number;
+  /** ns: idle metabolism counts whole intervals from here (contract.rs settle_metabolism) */
+  last_metabolism_ts: number;
   asleep_since: number;
   thought_count: number;
   ghost: boolean;
@@ -229,17 +231,30 @@ export interface Signer {
   }): Promise<unknown>;
 }
 
-export function callContract(
+export async function callContract(
   signer: Signer,
   methodName: string,
   args: object,
   deposit = "0",
   gas = GAS_DEFAULT
-) {
-  return signer.signAndSendTransaction({
+): Promise<unknown> {
+  const out = await signer.signAndSendTransaction({
     receiverId: CONTRACT_ID,
     actions: [{ type: "FunctionCall", params: { methodName, args, gas, deposit } }],
   });
+  // Some wallets resolve with a failed outcome instead of throwing: that is a failure too.
+  const failure = txFailure(out);
+  if (failure) throw new Error(failure);
+  return out;
+}
+
+/** Why a FinalExecutionOutcome failed (the contract's panic text when there is one), or null
+ *  when it succeeded or the wallet handed back no outcome. */
+export function txFailure(out: unknown): string | null {
+  const f = (out as { status?: { Failure?: unknown } } | null)?.status?.Failure;
+  if (f === undefined || f === null) return null;
+  const exec = (f as { ActionError?: { kind?: { FunctionCallError?: { ExecutionError?: string } } } }).ActionError?.kind?.FunctionCallError?.ExecutionError;
+  return exec || `The transaction failed: ${JSON.stringify(f).slice(0, 300)}`;
 }
 
 /** The number a contract call returned (e.g. hatch_mind's new id), whichever shape the signer
@@ -270,15 +285,16 @@ export const think = (s: Signer, id: number, prompt: string) =>
 export const chat = (s: Signer, id: number, prompt: string, near = 0.01) =>
   callContract(s, "chat", { id, prompt }, nearToYocto(near), GAS_THINK);
 /** Prepay chat credits for talking to other keepers' Minds (one approval for many messages). */
-export const buyChatCredits = (s: Signer, near: number) =>
-  callContract(s, "buy_chat_credits", {}, nearToYocto(near));
+export const buyChatCredits = (s: Signer, yocto: string) =>
+  callContract(s, "buy_chat_credits", {}, yocto);
 export const feed = (s: Signer, id: number, near = 0.05) =>
   callContract(s, "feed", { id }, nearToYocto(near));
 export const claimEarnings = (s: Signer, id: number) =>
   callContract(s, "claim_earnings", { id });
 export const reap = (s: Signer, id: number) => callContract(s, "reap", { id });
-export const revive = (s: Signer, id: number, near = 1.0) =>
-  callContract(s, "revive", { id }, nearToYocto(near));
+/** `yocto` is the exact on-chain revive price (params), never a rounded copy. */
+export const revive = (s: Signer, id: number, yocto: string) =>
+  callContract(s, "revive", { id }, yocto);
 /** Permissionless: realise a Mind's overdue idle drain on chain. */
 export const settle = (s: Signer, id: number) => callContract(s, "settle", { id });
 
@@ -369,8 +385,14 @@ export type JobOnChain = {
 export const JOB_DEPOSIT_NEAR = 0.03;
 const GAS_JOB = "100000000000000";
 
-export const agentProfiles = (ids: number[]) => (ids.length ? viewContract<AgentProfileOnChain[]>("agent_profiles", { ids: ids.slice(0, 100) }) : Promise.resolve([]));
-export const termsOf = (ids: number[]) => (ids.length ? viewContract<TermsOnChain[]>("terms_of", { ids: ids.slice(0, 100) }) : Promise.resolve([]));
+/** These views take at most 100 ids per call: ask in batches; answers keep the ids' order. */
+async function inBatches<T>(method: string, ids: number[]): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += LIST_PAGE) out.push(...(await viewContract<T[]>(method, { ids: ids.slice(i, i + LIST_PAGE) })));
+  return out;
+}
+export const agentProfiles = (ids: number[]) => inBatches<AgentProfileOnChain>("agent_profiles", ids);
+export const termsOf = (ids: number[]) => inBatches<TermsOnChain>("terms_of", ids);
 export const jobsOf = (account_id: string) => viewContract<JobOnChain[]>("jobs_of", { account_id });
 export const getJob = (job_id: number) => viewContract<JobOnChain | null>("get_job", { job_id });
 /** Plug an agent account into your Mind (null unplugs it). A little storage, excess refunded. */
@@ -379,7 +401,7 @@ export const setAgent = (s: Signer, mind_id: number, account_id: string | null, 
 export const publishJobService = (s: Signer, mind_id: number, title: string, description: string, category: number, priceNear: number, unit: string, sla_secs: number, output: "text" | "json", input_schema: string | null = null) =>
   callContract(s, "publish_job_service", { mind_id, title, description, category, price: nearToYocto(priceNear), unit, sla_secs, output, input_schema }, nearToYocto(input_schema ? 0.04 : 0.02));
 /** Each service's input form (JSON Schema text), or null. */
-export const inputSchemas = (ids: number[]) => viewContract<(string | null)[]>("input_schemas", { ids });
+export const inputSchemas = (ids: number[]) => inBatches<string | null>("input_schemas", ids);
 /** Order a service as a job: its price plus the refundable storage deposit. Returns the job id. */
 // priceNear is a rounded copy of the on-chain price: one microNEAR more covers the rounding
 // (a price set elsewhere with more than 6 decimals), and the contract refunds any excess
@@ -418,9 +440,10 @@ export const orderService = (s: Signer, service_id: number, prompt: string, near
 export const listForSale = (s: Signer, id: number, priceNear: number) =>
   callContract(s, "list_for_sale", { id, price: nearToYocto(priceNear) });
 export const unlist = (s: Signer, id: number) => callContract(s, "unlist", { id });
-/** `yocto` is the listing's exact on-chain price. */
+/** `yocto` is the listing's exact on-chain price; it is also sent as the price the buyer saw, so
+ *  a re-listing at another price between the look and the buy makes the contract refuse. */
 export const buyMind = (s: Signer, id: number, yocto: string) =>
-  callContract(s, "buy_mind", { id }, yocto);
+  callContract(s, "buy_mind", { id, expected_price: yocto }, yocto);
 export const nftTransfer = (s: Signer, id: number, receiver_id: string) =>
   callContract(s, "nft_transfer", { receiver_id, token_id: String(id) }, ONE_YOCTO);
 // NEP-178: let a marketplace transfer the Mind on the owner's behalf. `near` covers the

@@ -96,7 +96,27 @@ fn add_open(id: u64) {
     ids.push(id);
     open_list().insert(0, ids);
 }
+/// Open (undelivered) jobs per Mind, so one Mind (or a sybil buying from it) can't fill the
+/// whole colony queue and block every order.
+fn open_per_mind() -> LookupMap<u64, u32> {
+    LookupMap::new(b"O".to_vec())
+}
+/// Most jobs one Mind may have waiting for delivery at once.
+pub const MAX_OPEN_PER_MIND: u32 = 20;
+fn bump_open(mind_id: u64, up: bool) {
+    let mut m = open_per_mind();
+    let n = m.get(&mind_id).copied().unwrap_or(0);
+    let n = if up { n + 1 } else { n.saturating_sub(1) };
+    if n == 0 {
+        m.remove(&mind_id);
+    } else {
+        m.insert(mind_id, n);
+    }
+}
 fn remove_open(id: u64) {
+    if let Some(mind_id) = jobs().get(&id).map(|j| j.mind_id) {
+        bump_open(mind_id, false);
+    }
     let ids: Vec<u64> = open_ids().into_iter().filter(|i| *i != id).collect();
     open_list().insert(0, ids);
 }
@@ -231,15 +251,12 @@ impl Contract {
     /// Pay the thought a job cost her to whoever delivered it: the Mind's own agent earns it
     /// like a worker does (unless the keeper delivers as themselves — then it goes to the
     /// treasury, so a keeper never turns her food into their own money).
-    fn pay_deliverer(&mut self, mind_id: u64, cost: u128, deliverer: &AccountId, is_agent: bool) {
-        let owner = self.minds.get(&mind_id).map(|m| m.owner.clone());
-        if is_agent && Some(deliverer) != owner.as_ref() {
-            let mut earned = responder_earnings();
-            let prev = earned.get(deliverer).copied().unwrap_or(0);
-            earned.insert(deliverer.clone(), prev.saturating_add(cost));
-        } else {
-            self.pay_for_thought(mind_id, cost, Some(deliverer.clone()));
-        }
+    fn pay_deliverer(&mut self, mind_id: u64, cost: u128, deliverer: &AccountId, _is_agent: bool) {
+        // Only the platform's approved responders (the worker, the agent gateway) earn the thought
+        // from her food; any other deliverer's thought goes to the treasury. Otherwise a keeper
+        // could name an account of her own as the agent and turn the food, which no one may
+        // withdraw, into that account's earnings.
+        self.pay_for_thought(mind_id, cost, Some(deliverer.clone()));
     }
 }
 
@@ -271,6 +288,17 @@ impl Contract {
         let mind = self.minds.get(&s.mind_id).ok_or("no such Mind")?;
         if mind.ghost {
             return Err("a ghost takes no jobs".into());
+        }
+        // Her owner or her agent buying her services would only farm her rating and, through an
+        // agent account, turn her food into the agent's earnings.
+        if buyer == &mind.owner {
+            return Err("you can't order your own Mind's services".into());
+        }
+        if agents().get(&s.mind_id).is_some_and(|a| &a.account == buyer) {
+            return Err("her own agent can't order her services".into());
+        }
+        if open_per_mind().get(&s.mind_id).copied().unwrap_or(0) >= MAX_OPEN_PER_MIND {
+            return Err(format!("she has {MAX_OPEN_PER_MIND} jobs waiting: try again when one is delivered"));
         }
         // Work costs her food: a hungry, sleeping Mind takes no jobs until someone feeds her.
         if mind.asleep_since != 0 || mind.balance.as_yoctonear() < self.thought_cost {
@@ -325,6 +353,7 @@ impl Contract {
             },
         );
         add_open(id);
+        bump_open(s.mind_id, true);
         let mut mine = buyer_jobs();
         let mut list = mine.get(&buyer).cloned().unwrap_or_default();
         list.push(id);
@@ -697,6 +726,23 @@ mod tests {
         c.publish_service(0, "Wallet check".into(), "Reads a NEAR account".into(), 8, U128(30 * MILLI), "check".into());
         c
     }
+    fn shop3() -> Contract {
+        let mut c = shop();
+        for name in ["Ivy", "Oak"] {
+            at("alice.near", 1000 * MILLI, T0);
+            c.hatch_mind(name.into(), None);
+        }
+        for mind in [1u64, 2] {
+            at("alice.near", 100 * MILLI, T0);
+            c.publish_service(mind, "Wallet check".into(), "Reads a NEAR account".into(), 8, U128(30 * MILLI), "check".into());
+        }
+        c
+    }
+    /// bob orders service `sid` (services 0, 1, 2 belong to Minds 0, 1, 2 in shop3)
+    fn order_on(c: &mut Contract, sid: u64, ts: u64) -> u64 {
+        at("bob.near", 30 * MILLI + JOB_DEPOSIT, ts);
+        c.order_job(sid, "check bob.near".into())
+    }
     fn order(c: &mut Contract, ts: u64) -> u64 {
         at("bob.near", 30 * MILLI + JOB_DEPOSIT, ts);
         c.order_job(0, "check bob.near".into())
@@ -706,12 +752,13 @@ mod tests {
     }
 
     #[test]
-    fn agent_delivers_and_gets_paid_the_thought() {
+    fn a_personal_agent_delivers_and_her_thought_goes_to_the_treasury() {
         let mut c = shop();
         at("alice.near", 10 * MILLI, T0);
         c.set_agent(0, Some("bot.alice.near".parse().unwrap()), Some("my agent".into()));
         let id = order(&mut c, T0);
         let food0 = c.get_mind(0).unwrap().balance.as_yoctonear();
+        let treasury0 = c.treasury_balance().as_yoctonear();
         at("bot.alice.near", 0, T0 + 5 * SEC);
         c.deliver_job(id, "bob.near holds 3 NEAR".into());
         let j = c.get_job(id).unwrap();
@@ -720,7 +767,10 @@ mod tests {
         // nothing goes into her food, she only spends the 0.002 thought; 90% of 0.03 to her owner
         assert_eq!(m.balance.as_yoctonear(), food0 - 2 * MILLI);
         assert_eq!(m.owner_unclaimed.as_yoctonear(), 27 * MILLI);
-        assert_eq!(earned(&c, "bot.alice.near"), 2 * MILLI);
+        // her food never becomes the earnings of an account the keeper names (only the
+        // platform's approved responders earn the thought): it goes to the treasury, with the 10%
+        assert_eq!(earned(&c, "bot.alice.near"), 0);
+        assert_eq!(c.treasury_balance().as_yoctonear() - treasury0, 2 * MILLI + 3 * MILLI);
         let r = c.reputation_of(0);
         assert_eq!((r.delivered, r.refunded, r.total_secs), (1, 0, 5));
         assert_eq!(c.get_service(0).unwrap().orders, 1);
@@ -791,10 +841,10 @@ mod tests {
 
     #[test]
     fn a_full_order_list_is_refused_until_one_is_closed() {
-        let mut c = shop();
-        let first = order(&mut c, T0);
-        for _ in 1..MAX_BUYER_JOBS {
-            order(&mut c, T0);
+        let mut c = shop3();
+        let first = order_on(&mut c, 0, T0);
+        for i in 1..MAX_BUYER_JOBS {
+            order_on(&mut c, (i % 3) as u64, T0);
         }
         assert_eq!(c.jobs_of("bob.near".parse().unwrap()).len(), MAX_BUYER_JOBS);
         // the oldest job (and its 0.03 NEAR deposit) is still on the list (a 51st order is
@@ -805,7 +855,7 @@ mod tests {
         c.refund_job(first);
         at("bob.near", 0, T0 + (DEFAULT_SLA_SECS as u64 + 2) * SEC);
         c.close_job(first);
-        let next = order(&mut c, T0 + (DEFAULT_SLA_SECS as u64 + 3) * SEC);
+        let next = order_on(&mut c, 0, T0 + (DEFAULT_SLA_SECS as u64 + 3) * SEC);
         assert_eq!(c.jobs_of("bob.near".parse().unwrap()).len(), MAX_BUYER_JOBS);
         assert!(c.get_job(next).is_some());
     }
@@ -813,11 +863,51 @@ mod tests {
     #[test]
     #[should_panic(expected = "close finished ones in My orders first")]
     fn the_fifty_first_open_order_is_refused() {
+        let mut c = shop3();
+        for i in 0..MAX_BUYER_JOBS {
+            order_on(&mut c, (i % 3) as u64, T0);
+        }
+        order_on(&mut c, 0, T0);
+    }
+
+    #[test]
+    #[should_panic(expected = "jobs waiting")]
+    fn one_mind_takes_at_most_twenty_open_jobs() {
         let mut c = shop();
-        for _ in 0..MAX_BUYER_JOBS {
+        for _ in 0..MAX_OPEN_PER_MIND {
             order(&mut c, T0);
         }
         order(&mut c, T0);
+    }
+
+    #[test]
+    fn a_delivered_job_frees_a_place_in_her_queue() {
+        let mut c = shop();
+        let first = order(&mut c, T0);
+        for _ in 1..MAX_OPEN_PER_MIND {
+            order(&mut c, T0);
+        }
+        at("worker.near", 0, T0 + SEC);
+        c.deliver_job(first, "done".into());
+        order(&mut c, T0 + 2 * SEC); // room again
+    }
+
+    #[test]
+    #[should_panic(expected = "your own Mind")]
+    fn her_owner_cant_order_her_services() {
+        let mut c = shop();
+        at("alice.near", 30 * MILLI + JOB_DEPOSIT, T0);
+        c.order_job(0, "farm my rating".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "her own agent")]
+    fn her_agent_cant_order_her_services() {
+        let mut c = shop();
+        at("alice.near", 10 * MILLI, T0);
+        c.set_agent(0, Some("bot.alice.near".parse().unwrap()), None);
+        at("bot.alice.near", 30 * MILLI + JOB_DEPOSIT, T0);
+        c.order_job(0, "farm".into());
     }
 
     // ── paying with wNEAR (ft_transfer_call, the x402 path) ──

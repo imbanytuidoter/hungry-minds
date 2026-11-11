@@ -61,7 +61,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // paid, through the site, with the SDK
   const before = await wnear();
-  const task = await hireMind({ url: URL_SITE, accountId: BUYER, text, skillId: `service-${SERVICE}`, nodeUrl: RPC, waitMs: 240_000, pollMs: 5_000 });
+  const task = await hireMind({ url: URL_SITE, contractId: C, accountId: BUYER, text, skillId: `service-${SERVICE}`, nodeUrl: RPC, waitMs: 240_000, pollMs: 5_000 });
   const reply = task.artifacts?.[0]?.parts?.[0]?.text || "";
   ok(task.status.state === "TASK_STATE_COMPLETED" && reply.length > 0, "the paid call comes back COMPLETED with the result", reply);
   const jobId = task.metadata?.job_id;

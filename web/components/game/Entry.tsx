@@ -10,7 +10,7 @@ import { useGame } from "./GameProvider";
 import { fmt, MINT_SPLIT, moodOf, stateOf } from "@/lib/game/engine";
 import { L, type Lang } from "@/lib/game/i18n";
 import { LOOK_NAMES, NATURES, TONES, TONE_TILE, type Look } from "@/lib/game/look";
-import { CATEGORIES, type Category } from "@/lib/game/services";
+import { CATEGORIES, priceText, type Category } from "@/lib/game/services";
 import { clipBytes, LIMITS } from "@/lib/game/bytes";
 import { NETWORK, WALLET_KIND } from "@/lib/chain";
 import { useForSale } from "./AfterSale";
@@ -70,8 +70,10 @@ export default function Entry({
     }
   }, [restored, name, look, natures]);
 
+  // all 4,000 hatched: the contract would refuse, so the button says so instead
+  const soldOut = g.supplyLeft === 0;
   const hatch = async () => {
-    if (!n || busy) return;
+    if (!n || busy || soldOut) return;
     setBusy(true);
     const id = await g.hatch(n, look, natures);
     setBusy(false);
@@ -185,8 +187,8 @@ export default function Entry({
               <ConnectButtons />
             </div>
           )}
-          <button className="btn-cta" style={{ marginTop: 4, padding: "14px 22px", fontSize: 16 }} disabled={!n || busy || (g.mode === "live" && !g.account)} onClick={hatch}>
-            {busy ? "Hatching…" : n ? `Hatch ${n} · ${g.params.mintPrice} NEAR` : "Name her to hatch"}
+          <button className="btn-cta" style={{ marginTop: 4, padding: "14px 22px", fontSize: 16 }} disabled={!n || busy || soldOut || (g.mode === "live" && !g.account)} onClick={hatch}>
+            {soldOut ? "All 4,000 are hatched" : busy ? "Hatching…" : n ? `Hatch ${n} · ${g.params.mintPrice} NEAR` : "Name her to hatch"}
           </button>
           <BuyInstead onBuy={goBuy} />
           {g.wallet !== null && (
@@ -281,7 +283,7 @@ export default function Entry({
                     </span>
                   </div>
                   <span className="mono" style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
-                    {s.price.toFixed(2)} NEAR
+                    {priceText(s.price, g.params.guestMinPrice)} NEAR
                   </span>
                 </button>
               );

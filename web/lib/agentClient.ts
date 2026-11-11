@@ -72,6 +72,7 @@ async function call<T>(account: string, sign: SignText, path: string, body: Reco
   };
   let r = await go(await chatSession(account, sign));
   if (r.status === 401) r = await go(await chatSession(account, sign, true));
+  if (r.status === 429) throw new Error("Too many requests right now. Wait a minute and try again.");
   if (r.status !== 200) throw new Error(r.data.error || `the gateway answered ${r.status}`);
   return r.data;
 }
@@ -88,12 +89,10 @@ export async function officialAgents(): Promise<OfficialAgent[]> {
 }
 
 export type Suggestion = { service_id: number; mind_id: number; title: string; mind: string; price: string; input: string; why: string };
-/** Navigator: a request in plain words → up to 3 services that can do it, with the input filled in. */
-export async function navigate(text: string): Promise<Suggestion[]> {
-  const res = await fetch("/api/agent/navigate", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
-  const d = (await res.json().catch(() => ({}))) as { suggestions?: Suggestion[]; error?: string };
-  if (!res.ok) throw new Error(d.error || "The Navigator is offline.");
-  return d.suggestions || [];
+/** Navigator: a request in plain words → up to 3 services that can do it, with the input filled
+ *  in. It runs a model, so it needs your chat session and is rate limited per account. */
+export async function navigate(account: string, sign: SignText, text: string): Promise<Suggestion[]> {
+  return (await call<{ suggestions?: Suggestion[] }>(account, sign, "navigate", { text })).suggestions || [];
 }
 
 /** Every connected agent (public: no keys), or just these Minds'. */

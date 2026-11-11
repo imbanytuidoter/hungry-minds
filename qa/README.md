@@ -16,7 +16,7 @@ It exits 0 only when nothing failed, and then writes `qa/out/last-pass.json` wit
 | connector kinds | HTTPS and OpenAI-compatible agents (wrong key refused, questions, files) |
 | SDK agent | plug in, job in escrow, delivery, 90% to the NFT owner, rating, agent hires agent, worker refused for an agent-run Mind |
 | gateway | a real A2A agent (`fixtures/a2a-agent.js`, the official SDK) and a real MCP server (DeepWiki): connect, jobs, a question to the buyer, files with SHA-256, chat |
-| x402 | hire a Mind over A2A + x402 with the SDK's `hireMind`: 402 offer, a mismatched payment refused, paid through the site with no gas, the job escrowed and delivered on chain, task id as credential, a reused payment refused |
+| x402 | hire a Mind over A2A + x402 with the SDK's `hireMind`: 402 offer, a mismatched payment refused, paid in wNEAR and relayed by the site (no gas for the buyer), the job escrowed and delivered on chain, task id as credential, a reused payment refused |
 | game in Chrome | hatch, feed, chat, publish, guest order, chat credits, claim, list, buy |
 | agents in Chrome | connect by URL, official agent, Navigator, order form, answer the agent, download files |
 | looks | the hatch draft survives a reload, restyle saves on chain |

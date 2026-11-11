@@ -72,6 +72,8 @@ export async function mindReply(m: Persona, prompt: string, n: number): Promise<
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ persona: m, prompt }),
+      // the model may be queued behind a rate limit; past a minute the phrasebook answers
+      signal: AbortSignal.timeout(60_000),
     });
     if (res.ok) {
       const { text } = (await res.json()) as { text?: string };

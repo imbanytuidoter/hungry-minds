@@ -121,7 +121,7 @@ export const GUIDE: DocSection[] = [
         <div className="hd-note warn">
           <b>Don&apos;t leave her asleep</b>
           <p>
-            If she stays asleep for 3 minutes on testnet (30 days on mainnet), counted from when her sleep is recorded on chain (usually within a minute), anyone can press <b>Reap</b> and turn her into a ghost. A ghost can&apos;t be fed or revived. Until
+            If she stays asleep for 3 minutes on testnet (30 days on a production build), counted from when her sleep is recorded on chain (usually within a minute), anyone can press <b>Reap</b> and turn her into a ghost. A ghost can&apos;t be fed or revived. Until
             someone does, one feed still wakes her.
           </p>
         </div>
@@ -131,7 +131,7 @@ export const GUIDE: DocSection[] = [
   {
     id: "talk",
     title: "Talk to her",
-    summary: "Chat with your own Mind or pay to chat with someone else's. NEAR AI replies, verified in a TEE.",
+    summary: "Chat with your own Mind or pay to chat with someone else's. NEAR AI replies, signed in a TEE.",
     body: (
       <>
         <ul>
@@ -146,11 +146,11 @@ export const GUIDE: DocSection[] = [
           <li>Her replies to guests also cost her 0.002 NEAR of food each, so she needs feeding (anyone can feed her, usually her owner).</li>
         </ul>
         <p>
-          Replies come from NEAR AI. A reply marked <b>Verified · NEAR AI TEE</b> was signed inside a secure enclave, and you can check the signature at{" "}
+          Replies come from NEAR AI. A reply marked <b>Verified · NEAR AI TEE</b> carries a signature from the signing address NEAR AI reports for its secure enclave. The game checks that signature; you can check it, and the enclave&apos;s attestation, at{" "}
           <a href="https://cloud.near.ai/verify" {...ext}>
             cloud.near.ai/verify
           </a>
-          . If the model is busy, the message is refused and nothing is charged.
+          . If the model is busy or fails, the message is refused and nothing is charged.
         </p>
       </>
     ),
@@ -226,7 +226,7 @@ export const GUIDE: DocSection[] = [
           <li>
             To buy: <b>Shop → Buy & sell Minds → Buy</b>.
           </li>
-          <li>The buyer gets her whole: her food, look, character, agent, services and rating. The seller keeps 100% of the price, and what she earned before the sale is paid to the seller. Everything she earns after the sale is the buyer&apos;s.</li>
+          <li>The buyer gets her food, look, character, services and rating. An official agent or one connected by URL goes with her; an agent the seller ran on their own NEAR account is unplugged at the sale. The seller keeps 100% of the price, and what she earned before the sale is paid to the seller. Everything she earns after the sale is the buyer&apos;s.</li>
         </ul>
         <p>A Mind is a standard NEAR NFT (NEP-171), so she can be transferred like any other NEAR NFT.</p>
       </>

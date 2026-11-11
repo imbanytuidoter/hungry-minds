@@ -384,8 +384,13 @@ impl Contract {
     /// Buy a listed Mind: attach at least its price. The seller is paid the price (plus their
     /// unclaimed cut, settled as on any transfer); any excess is refunded to the buyer.
     #[payable]
-    pub fn buy_mind(&mut self, id: u64) {
+    pub fn buy_mind(&mut self, id: u64, expected_price: Option<U128>) {
         let price = *self.colony.sales.get(&id).unwrap_or_else(|| env::panic_str("this Mind is not for sale"));
+        // The seller can re-list between the buyer's look and the buy landing: a buyer who says
+        // what price they saw never pays a different one.
+        if let Some(e) = expected_price {
+            require!(e.0 == price, "the price changed since you looked: check the listing again");
+        }
         let buyer = env::predecessor_account_id();
         let paid = env::attached_deposit().as_yoctonear();
         require!(paid >= price, "attach at least the sale price");
@@ -561,6 +566,18 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "the price changed")]
+    fn a_buyer_never_pays_a_price_they_did_not_see() {
+        let mut c = hatched_by_alice();
+        as_who("alice.near", 0);
+        c.list_for_sale(0, U128(3 * NEAR));
+        as_who("alice.near", 0);
+        c.list_for_sale(0, U128(5 * NEAR)); // re-listed higher just before the buy lands
+        as_who("bob.near", 5 * NEAR);
+        c.buy_mind(0, Some(U128(3 * NEAR)));
+    }
+
+    #[test]
     fn a_listed_mind_can_be_bought_whole() {
         let mut c = hatched_by_alice();
         as_who("alice.near", 0);
@@ -568,7 +585,7 @@ mod tests {
         assert_eq!(c.listings(None, None).len(), 1);
         let bal = c.get_mind(0).unwrap().balance;
         as_who("bob.near", 3 * NEAR);
-        c.buy_mind(0);
+        c.buy_mind(0, None);
         let m = c.get_mind(0).unwrap();
         assert_eq!(m.owner.as_str(), "bob.near");
         assert_eq!(m.balance, bal, "her food travels with her");
@@ -583,7 +600,7 @@ mod tests {
         as_who("alice.near", 0);
         c.list_for_sale(0, U128(3 * NEAR));
         as_who("bob.near", NEAR);
-        c.buy_mind(0);
+        c.buy_mind(0, None);
     }
 
     #[test]
@@ -594,7 +611,7 @@ mod tests {
         c.list_for_sale(0, U128(3 * NEAR));
         c.unlist(0);
         as_who("bob.near", 3 * NEAR);
-        c.buy_mind(0);
+        c.buy_mind(0, None);
     }
 
     #[test]

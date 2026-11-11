@@ -53,6 +53,12 @@ class Ledger {
     return this.rows().filter((r) => !r.own && r.payer === payer).reduce((n, r) => n + r.count, 0);
   }
 
+  /** Messages answered on this Mind (her keeper's and every guest's) not yet settled. Each one
+   *  will cost her a thought from her food at settlement, guest ones included. */
+  pendingOnMind(mindId) {
+    return this.rows().filter((r) => r.mind_id === mindId).reduce((n, r) => n + r.count, 0);
+  }
+
   hasWork() {
     return !!this.state.inflight || Object.keys(this.state.entries).length > 0;
   }

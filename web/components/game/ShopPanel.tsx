@@ -6,8 +6,8 @@ import { useGame } from "./GameProvider";
 import { fmt, foodBarPct, moodOf, STATE_LABEL, stateOf, timeToSleep, type MindRec } from "@/lib/game/engine";
 import { dur } from "./HomePanels";
 import { TONE_TILE } from "@/lib/game/look";
-import { CAT_IDS, CATEGORIES, needsAgent, type Category, type Offer } from "@/lib/game/services";
-import type { JobRec } from "./GameProvider";
+import { CAT_IDS, CATEGORIES, needsAgent, priceText, type Category, type Offer } from "@/lib/game/services";
+import type { Game, JobRec } from "./GameProvider";
 import { ConnectButtons } from "./Header";
 import { clipBytes, LIMITS } from "@/lib/game/bytes";
 import { CONTRACT_ID, JOB_DEPOSIT_NEAR } from "@/lib/chain";
@@ -81,7 +81,7 @@ export default function ShopPanel({ cat, setCat, order, visit, initialMode = "ma
                         {m.name}
                       </button>
                       <MindCondition m={m} />
-                      <button className="btn-ink" style={{ padding: "6px 10px", fontSize: 12, alignSelf: "flex-start" }} disabled={g.busy} onClick={() => confirm(`Buy ${m.name} for ${price} NEAR? You get her whole: food, memories and services.`) && g.buy(m.id)}>
+                      <button className="btn-ink" style={{ padding: "6px 10px", fontSize: 12, alignSelf: "flex-start" }} disabled={g.busy} onClick={() => confirm(`Buy ${m.name} for ${price} NEAR? You get her whole: food, memories and services.${agentAtSale(g, m, "buyer")}`) && g.buy(m.id)}>
                         Buy · {price} NEAR
                       </button>
                     </div>
@@ -129,7 +129,7 @@ export default function ShopPanel({ cat, setCat, order, visit, initialMode = "ma
               const st = stateOf(m);
               const mine = m.owner === g.account;
               // A data service with no agent behind it can't be ordered (the contract refuses).
-              const noAgent = g.mode === "live" && needsAgent(s.cat) && !g.agents[m.id]?.account;
+              const noAgent = needsAgent(s.cat) && !g.agents[m.id]?.account; // (the demo has no agents)
               const open = st !== "asleep" && st !== "ghost" && s.live && !mine && !noAgent;
               return (
                 <div key={s.id} className="lift" style={{ display: "flex", flexDirection: "column", borderRadius: 20, background: "var(--surface)", border: "1px solid var(--line)", padding: "16px 16px 0", opacity: s.live ? 1 : 0.6 }}>
@@ -140,7 +140,7 @@ export default function ShopPanel({ cat, setCat, order, visit, initialMode = "ma
                   <span style={{ marginTop: 6, fontSize: 13, lineHeight: 1.45, color: "var(--muted)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", minHeight: 37 }}>{s.desc}</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
                     <span className="mono" style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 15, fontWeight: 600, color: "var(--ink-strong)" }}>
-                      {s.price.toFixed(2)} NEAR
+                      {priceText(s.price, g.params.guestMinPrice)} NEAR
                       <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 13 }}>/ {s.unit}</span>
                     </span>
                     {s.sla && (
@@ -289,13 +289,19 @@ function Navigator({ order }: { order: (m: MindRec, s: Offer, prefill?: string) 
   const [err, setErr] = useState("");
   const ask = async () => {
     if (!text.trim() || busy) return;
+    // it runs on your chat session (one signature a day), like the rest of the gateway
+    if (!g.account) return setErr("Connect a wallet to use the Navigator.");
     setBusy(true);
     setErr("");
-    try {
-      setOut(await navigate(text));
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
+    const r = await g.agentCall(async (a, sign) => {
+      try {
+        return await navigate(a, sign, text);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+        return null;
+      }
+    });
+    if (r) setOut(r);
     setBusy(false);
   };
   return (
@@ -325,7 +331,7 @@ function Navigator({ order }: { order: (m: MindRec, s: Offer, prefill?: string) 
               {x.why && <span style={{ fontSize: 12, color: "var(--muted-2)" }}>{x.why}</span>}
             </div>
             <button className="btn-cta" style={{ padding: "8px 14px", fontSize: 13 }} disabled={m.owner === g.account} onClick={() => order(m, s, x.input)}>
-              {m.owner === g.account ? "Yours" : `Order · ${s.price.toFixed(2)}`}
+              {m.owner === g.account ? "Yours" : `Order · ${priceText(s.price, g.params.guestMinPrice)}`}
             </button>
           </div>
         );
@@ -733,7 +739,22 @@ agent.start();`}
   );
 }
 
-const tag: React.CSSProperties = { fontSize: 11, padding: "3px 8px", borderRadius: 6, background: "var(--surface-soft)", color: "var(--muted)" };
+/**
+ * What happens to her agent when she changes hands (contract.rs unplug_on_sale): an agent
+ * connected by URL or an official one runs on the gateway, a platform account, and goes with
+ * her; an agent on the seller's own NEAR account is unplugged. Text starts with a space.
+ */
+function agentAtSale(g: Game, m: MindRec, who: "buyer" | "seller"): string {
+  const acct = g.agents[m.id]?.account;
+  if (!acct) return "";
+  if (g.gatewayId && acct === g.gatewayId)
+    return who === "seller" ? " Her agent is connected through the gateway, so it goes with her: from then on the buyer earns 90% of its orders." : " Her agent is connected through the gateway, so it goes with her.";
+  if (g.gatewayId)
+    return who === "seller" ? ` Her agent runs on your own account (${acct}), so it is unplugged at the sale. The buyer can connect their own.` : ` Her agent runs on the seller's own account, so it is unplugged at the sale. You can connect your own.`;
+  return " Her agent goes with her only if it is connected by URL or official; one run on the seller's own account is unplugged at the sale.";
+}
+
+const tag: React.CSSProperties ={ fontSize: 11, padding: "3px 8px", borderRadius: 6, background: "var(--surface-soft)", color: "var(--muted)" };
 
 export type ShopMode = "market" | "nft" | "orders" | "earn";
 
@@ -808,7 +829,7 @@ function SalesPanel({ visit, toHatch }: { forSale: { m: MindRec; price: number }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <span className="sub">
-        A Mind is an NFT. She changes hands whole: her food, look, agent, services and rating. The seller keeps 100% of the price; there is no fee and no royalty.
+        A Mind is an NFT. She changes hands whole: her food, look, services and rating. An agent connected by URL (or an official one) goes with her; an agent run on the seller&apos;s own NEAR account is unplugged at the sale. The seller keeps 100% of the price; there is no fee and no royalty.
       </span>
       <div className="card">
         <span style={{ fontWeight: 600, fontSize: 16 }}>Minds for sale</span>
@@ -836,7 +857,7 @@ function SalesPanel({ visit, toHatch }: { forSale: { m: MindRec; price: number }
                     style={{ padding: "6px 10px", fontSize: 12, alignSelf: "flex-start" }}
                     disabled={g.busy || !g.account}
                     title={g.account ? undefined : "Connect a wallet to buy"}
-                    onClick={() => confirm(`Buy ${m.name} for ${price} NEAR? You get her whole: food, look, agent, services and rating.`) && g.buy(m.id)}
+                    onClick={() => confirm(`Buy ${m.name} for ${price} NEAR? You get her whole: food, look, services and rating.${agentAtSale(g, m, "buyer")}`) && g.buy(m.id)}
                   >
                     Buy · {price} NEAR
                   </button>
@@ -954,7 +975,7 @@ function DevPanel({ toHatch }: { toHatch: () => void }) {
               <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontWeight: 600, fontSize: 14 }}>{s.title}</span>
                 <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                  {m?.name} · {s.price.toFixed(2)} / {s.unit} · {s.orders} {s.orders === 1 ? "order" : "orders"}
+                  {m?.name} · {priceText(s.price, g.params.guestMinPrice)} / {s.unit} · {s.orders} {s.orders === 1 ? "order" : "orders"}
                 </span>
               </div>
               <span className="mono" style={{ fontSize: 13, fontWeight: 600, color: "var(--ok)" }}>
@@ -1022,7 +1043,7 @@ function DevPanel({ toHatch }: { toHatch: () => void }) {
                   </>
                 )}
               </div>
-              {listed !== undefined && <span style={{ fontSize: 12, lineHeight: 1.45, color: "var(--muted-2)" }}>The buyer gets {m.name} whole: personality, memories, food, services and her track record. Your unclaimed NEAR is paid out to you at the sale. Her agent goes with her: from then on the buyer earns 90% of its orders.</span>}
+              {listed !== undefined && <span style={{ fontSize: 12, lineHeight: 1.45, color: "var(--muted-2)" }}>The buyer gets {m.name} whole: personality, memories, food, services and her track record. Your unclaimed NEAR is paid out to you at the sale.{agentAtSale(g, m, "seller")}</span>}
               <AgentBox m={m} />
             </div>
           );
