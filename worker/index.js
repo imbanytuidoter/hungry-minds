@@ -36,7 +36,7 @@ const WORKER_KEY = process.env.WORKER_KEY || "";
 // The brain, in order of preference:
 //   1. NEAR AI (set NEAR_AI_KEY) — the intended Private-TEE path;
 //   2. an open OpenAI-compatible endpoint (LLM_URL, default: Pollinations, no key needed);
-//   3. the offline phrasebook (phrasebook.js), only if the model call fails.
+//   3. the offline phrasebook (phrasebook.js), only with no model configured, or for the owner's own on-chain thought when the model fails.
 // Set LLM_URL=off to skip (2). NEAR_AI=off ignores the key (QA runs that must not spend the
 // NEAR AI credits: `node qa/run.js --no-near-ai`).
 const NEAR_AI_KEY = process.env.NEAR_AI === "off" ? "" : process.env.NEAR_AI_KEY || "";
@@ -232,6 +232,8 @@ async function main() {
       contractId: CONTRACT_ID,
       workerId: WORKER_ID,
       askLLM: (mind, prompt, history) => (LLM ? askLLM(mind, prompt, history) : Promise.resolve("")),
+      // with a model configured an empty reply is a failure (nothing charged), never the phrasebook
+      hasModel: !!LLM,
       plan: LLM ? planLLM : null,
       proofOf,
       fallbackReply: phrasebookReply,

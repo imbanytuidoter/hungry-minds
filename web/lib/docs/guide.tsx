@@ -150,7 +150,7 @@ export const GUIDE: DocSection[] = [
           <a href="https://cloud.near.ai/verify" {...ext}>
             cloud.near.ai/verify
           </a>
-          . If the model is busy or fails, the message is refused and nothing is charged.
+          . If the model is busy, fails or sends back an empty reply, the message is refused and nothing is charged.
         </p>
       </>
     ),
@@ -195,6 +195,7 @@ export const GUIDE: DocSection[] = [
           </li>
         </ol>
         <p>If her agent needs more information, it asks you a question in My orders, and the job continues after you answer.</p>
+        <p>You can have at most 5 open jobs with one Mind at a time. A Mind takes at most 20 open jobs in all.</p>
       </>
     ),
   },
@@ -226,7 +227,7 @@ export const GUIDE: DocSection[] = [
           <li>
             To buy: <b>Shop → Buy & sell Minds → Buy</b>.
           </li>
-          <li>The buyer gets her food, look, character, services and rating. An official agent or one connected by URL goes with her; an agent the seller ran on their own NEAR account is unplugged at the sale. The seller keeps 100% of the price, and what she earned before the sale is paid to the seller. Everything she earns after the sale is the buyer&apos;s.</li>
+          <li>The buyer gets her food, look, character, services and rating. An official agent or one connected by URL goes with her and keeps delivering her paid jobs for the new owner; for chat and tests the gateway asks the new owner to connect their own agent. An agent the seller ran on their own NEAR account is unplugged at the sale. A ghost can&apos;t be listed or bought. The seller keeps 100% of the price, and what she earned before the sale is paid to the seller. Everything she earns after the sale is the buyer&apos;s.</li>
         </ul>
         <p>A Mind is a standard NEAR NFT (NEP-171), so she can be transferred like any other NEAR NFT.</p>
       </>

@@ -19,6 +19,7 @@
 
 const crypto = require("crypto");
 const { makeFetch } = require("./safe-fetch");
+const { publicUrl } = require("./limits");
 
 const KINDS = ["official", "a2a", "mcp", "openai", "http"];
 const official = require("./official");
@@ -103,7 +104,7 @@ async function a2aCard(conn, fetchImpl) {
     try {
       return await resolver.resolve(base, "/.well-known/agent.json"); // v0.2 / early v0.3 name
     } catch {
-      throw new Error(`no A2A agent card at ${base}/.well-known/agent-card.json (${e.message})`);
+      throw new Error(`no A2A agent card at ${publicUrl(base).replace(/\/+$/, "")}/.well-known/agent-card.json (${e.message})`);
     }
   }
 }
@@ -183,12 +184,18 @@ async function mcpClient(conn, secret) {
     await client.connect(new StreamableHTTPClientTransport(url, { fetch: fetchImpl }));
     return client;
   } catch (e) {
+    client.close().catch(() => {});
     const legacy = new Client({ name: "hungry-minds-gateway", version: "1.0.0" });
+    const sse = new SSEClientTransport(url, { fetch: fetchImpl, eventSourceInit: { fetch: fetchImpl } });
     try {
-      await legacy.connect(new SSEClientTransport(url, { fetch: fetchImpl, eventSourceInit: { fetch: fetchImpl } }));
+      await legacy.connect(sse);
       return legacy;
     } catch {
-      throw new Error(`can't reach an MCP server at ${conn.url} (${e.message})`);
+      // a failed SSE connect leaves its EventSource reconnecting forever (one more per health
+      // check against a dead server): close it
+      await legacy.close().catch(() => {});
+      await sse.close().catch(() => {});
+      throw new Error(`can't reach an MCP server at ${publicUrl(conn.url)} (${e.message})`);
     }
   }
 }

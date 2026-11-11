@@ -38,17 +38,48 @@ const DEFAULT_MAX_PRICE = "1"; // NEAR
 // wNEAR's registration costs 0.00125 NEAR; a token asking more than this is not paid
 const MAX_STORAGE_DEPOSIT = 10_000_000_000_000_000_000_000n; // 0.01 NEAR
 
-/** maxPrice in NEAR ("0.5", 0.5) or a bigint of yoctoNEAR → yoctoNEAR. */
-function yoctoOf(maxPrice) {
-  if (typeof maxPrice === "bigint") return maxPrice;
-  const s = String(maxPrice).trim();
-  const y = /^\d+(\.\d{1,24})?$/.test(s) ? utils.format.parseNearAmount(s) : null;
-  if (!y) throw new Error(`maxPrice must be an amount of NEAR such as "0.5" (or a bigint of yoctoNEAR), got ${maxPrice}`);
-  return BigInt(y);
+// The most a service may cost unless the caller passes allowHighPrice: true. A cap far above
+// any real price only protects against a typo (or yoctoNEAR passed as NEAR) if it is low.
+const HIGH_PRICE = 100n * 10n ** 24n; // 100 NEAR
+// maxPrice is in NEAR: a string with more integer digits than this is almost surely yoctoNEAR
+// ("500000000000000000000000" meant as 0.5 NEAR would allow 5e23 NEAR).
+const MAX_NEAR_DIGITS = 6;
+
+/** maxPrice in NEAR ("0.5", 0.5) or a bigint of yoctoNEAR → yoctoNEAR. Over 100 NEAR throws
+ *  unless `allowHighPrice`. */
+function yoctoOf(maxPrice, { allowHighPrice = false } = {}) {
+  let y;
+  if (typeof maxPrice === "bigint") y = maxPrice;
+  else {
+    const s = String(maxPrice).trim();
+    const int = /^(\d+)(\.\d+)?$/.exec(s)?.[1];
+    if (int && int.replace(/^0+(?=\d)/, "").length > MAX_NEAR_DIGITS) throw new Error(`maxPrice is in NEAR; pass a bigint for yocto (got "${s}", which would be ${int.length} digits of NEAR)`);
+    const parsed = /^\d+(\.\d{1,24})?$/.test(s) ? utils.format.parseNearAmount(s) : null;
+    if (!parsed) throw new Error(`maxPrice must be an amount of NEAR such as "0.5" (or a bigint of yoctoNEAR), got ${maxPrice}`);
+    y = BigInt(parsed);
+  }
+  if (y < 0n) throw new Error("maxPrice can't be negative");
+  if (y > HIGH_PRICE && !allowHighPrice) throw new Error(`maxPrice ${utils.format.formatNearAmount(y.toString())} NEAR is above 100 NEAR: pass allowHighPrice: true if you really mean it`);
+  return y;
+}
+
+/** The error for a paid call that did not return a task. A 504 means the payment was relayed
+ *  but its outcome is unknown: code PAYMENT_UNKNOWN with the transaction hash; look the order up
+ *  (jobs_of) before paying again, never retry blindly. A 409 "already relayed" is the same
+ *  payment sent twice (code ALREADY_RELAYED). Pure: unit-tested. */
+function paymentError(status, data, { contractId, accountId } = {}) {
+  const msg = data?.error?.message || (typeof data?.error === "string" ? data.error : "") || JSON.stringify(data ?? null).slice(0, 300);
+  const check = `check jobs_of(${accountId || "<your account>"}) on ${contractId || "the contract"} before trying again`;
+  if (status === 504) {
+    const transaction = data?.error?.data?.transaction || null;
+    return Object.assign(new Error(`the payment was sent but its outcome is unknown${transaction ? ` (transaction ${transaction})` : ""}: it may still place your order, so ${check}; do not pay again blindly. (${msg})`), { code: "PAYMENT_UNKNOWN", status, transaction });
+  }
+  if (status === 409 && /already relayed/i.test(msg)) return Object.assign(new Error(`this payment was already relayed: ${check}`), { code: "ALREADY_RELAYED", status });
+  return Object.assign(new Error(`payment refused (${status}): ${msg}`), { code: "PAYMENT_REFUSED", status });
 }
 
 /** Throws unless the 402 row is exactly the payment the caller agreed to. Pure: unit-tested. */
-function checkRow(row, { contractId, networkId = "testnet", maxPrice = DEFAULT_MAX_PRICE, skillId } = {}) {
+function checkRow(row, { contractId, networkId = "testnet", maxPrice = DEFAULT_MAX_PRICE, skillId, allowHighPrice = false } = {}) {
   if (!contractId) throw new Error("contractId is required: the Hungry Minds contract you expect to pay");
   const wrap = wrapOf(networkId);
   const e = row?.extra || {};
@@ -62,7 +93,7 @@ function checkRow(row, { contractId, networkId = "testnet", maxPrice = DEFAULT_M
   } catch {
     throw new Error(`the offer's amount is not a number: ${row.amount}`);
   }
-  const cap = yoctoOf(maxPrice) + JOB_DEPOSIT;
+  const cap = yoctoOf(maxPrice, { allowHighPrice }) + JOB_DEPOSIT;
   if (amount <= 0n || amount > cap) throw new Error(`the offer asks ${utils.format.formatNearAmount(amount.toString())} NEAR, more than maxPrice + 0.03 NEAR (${utils.format.formatNearAmount(cap.toString())}): refused`);
   let gas;
   try {
@@ -113,6 +144,9 @@ async function paymentFor(account, row, text, blockHeightTtl) {
   // near-api-js caches the access key and does not advance its nonce for a delegate, so read
   // it fresh and advance it ourselves: two payments from one account never share a nonce.
   if (account.accessKeyByPublicKeyCache) account.accessKeyByPublicKeyCache = {};
+  // the worker trims the message text before it compares it with the signed input: sign the
+  // same trimmed text (and send it trimmed), or a message with a trailing newline is refused
+  text = String(text ?? "").trim();
   const args = { receiver_id: row.payTo, amount: row.amount, msg: JSON.stringify({ service_id: e.service_id, input: text }) };
   const signed = await account.signedDelegate({
     receiverId: row.asset,
@@ -140,11 +174,19 @@ async function paymentFor(account, row, text, blockHeightTtl) {
  * @param {string} [o.networkId] "testnet" (default) or "mainnet"
  * @param {string} [o.privateKey] "ed25519:..." (default: ~/.near-credentials/<network>/<account>.json)
  * @param {boolean} [o.autoWrap] register with wNEAR and wrap what is missing first (default true)
+ * @param {boolean} [o.allowHighPrice] allow a maxPrice above 100 NEAR (default false)
  * @param {number} [o.waitMs]   how long to poll for the result (default 10 min)
+ *
+ * Errors carry a `code`: "PAYMENT_UNKNOWN" (HTTP 504: the payment was relayed but its outcome
+ * is unknown; `transaction` holds the hash: look your order up with jobs_of before trying
+ * again, hireMind never retries a payment), "ALREADY_RELAYED" (409) or "PAYMENT_REFUSED".
  */
-async function hireMind({ url, contractId, accountId, text, skillId, maxPrice = DEFAULT_MAX_PRICE, networkId = "testnet", privateKey, nodeUrl, autoWrap = true, waitMs = 600_000, pollMs = 10_000 }) {
+async function hireMind({ url, contractId, accountId, text, skillId, maxPrice = DEFAULT_MAX_PRICE, allowHighPrice = false, networkId = "testnet", privateKey, nodeUrl, autoWrap = true, waitMs = 600_000, pollMs = 10_000 }) {
   if (!contractId) throw new Error("hireMind needs contractId: the Hungry Minds contract you expect to pay");
-  yoctoOf(maxPrice); // a bad maxPrice fails before any network call
+  yoctoOf(maxPrice, { allowHighPrice }); // a bad maxPrice fails before any network call
+  // the worker trims the text it compares with the signed input; sign and send the same text
+  text = String(text ?? "").trim();
+  if (!text) throw new Error("hireMind needs text: what you want done");
   const keyStore = privateKey
     ? (() => {
         const k = new keyStores.InMemoryKeyStore();
@@ -163,10 +205,11 @@ async function hireMind({ url, contractId, accountId, text, skillId, maxPrice = 
   const row = rows[0];
   if (!row) throw new Error(`no payment option on near:${networkId}${skillId ? ` for ${skillId}` : ""}`);
   // never sign what the server says without checking it against what the caller agreed to
-  const { wrap } = checkRow(row, { contractId, networkId, maxPrice, skillId });
+  const { wrap } = checkRow(row, { contractId, networkId, maxPrice, skillId, allowHighPrice });
   if (autoWrap) await ensureWnear(account, wrap, row.amount);
+  // one paid call, never retried: a timeout may still have placed the order (PAYMENT_UNKNOWN)
   const paid = await rpc(url, body, { "X-PAYMENT": await paymentFor(account, row, text) });
-  if (paid.status !== 200 || !paid.data.result) throw new Error(`payment refused (${paid.status}): ${paid.data.error?.message || paid.data.error || JSON.stringify(paid.data).slice(0, 300)}`);
+  if (paid.status !== 200 || !paid.data.result) throw paymentError(paid.status, paid.data, { contractId, accountId });
   const receipt = paid.headers.get("payment-response") || paid.headers.get("x-payment-response");
   const task = await poll(url, paid.data.result.task, waitMs, pollMs);
   if (receipt) task.payment = JSON.parse(Buffer.from(receipt, "base64").toString("utf8"));
@@ -185,10 +228,11 @@ async function poll(url, task, waitMs, pollMs) {
 
 /** Answer her agent's question (a task in TASK_STATE_INPUT_REQUIRED); free, then polls on. */
 async function answer(url, taskId, text, { waitMs = 600_000, pollMs = 10_000 } = {}) {
+  text = String(text ?? "").trim(); // the worker trims it too
   const message = { messageId: crypto.randomUUID(), role: "ROLE_USER", taskId, parts: [{ text }] };
   const r = await rpc(url, { jsonrpc: "2.0", id: 1, method: "SendMessage", params: { message } });
   if (!r.data.result?.task) throw new Error(r.data.error?.message || `answer refused (${r.status})`);
   return poll(url, r.data.result.task, waitMs, pollMs);
 }
 
-module.exports = { hireMind, answer, paymentFor, ensureWnear, checkRow, formatNear: utils.format.formatNearAmount };
+module.exports = { hireMind, answer, paymentFor, ensureWnear, checkRow, paymentError, yoctoOf, HIGH_PRICE, formatNear: utils.format.formatNearAmount };

@@ -12,7 +12,18 @@ const LLM_KEY = process.env.LLM_KEY || "";
 const LLM_MODEL = process.env.LLM_MODEL || "openai";
 
 const PER_MINUTE = 10; // replies per address per minute
-const MAX_WAITING = 20; // calls queued behind the one in flight
+const MAX_WAITING = 3; // calls queued behind the one in flight (a reply that waits longer is useless to the player)
+/** All callers together, per minute: x-forwarded-for can be spoofed when no proxy rewrites it,
+ *  so the per-IP limit alone can't stop one script. */
+const GLOBAL_PER_MIN = 30;
+const recent: number[] = [];
+function allowGlobal(): boolean {
+  const t = Date.now();
+  while (recent.length && recent[0] < t - 60_000) recent.shift();
+  if (recent.length >= GLOBAL_PER_MIN) return false;
+  recent.push(t);
+  return true;
+}
 
 let queue: Promise<unknown> = Promise.resolve();
 let waiting = 0;
@@ -83,10 +94,21 @@ const nums = (v: unknown, max: number): number[] | null =>
 
 export async function POST(req: Request) {
   if (!sameOrigin(req)) return Response.json({ error: "forbidden" }, { status: 403 });
-  if (!allow(clientIp(req))) return Response.json({ error: "Too many messages. Wait a minute." }, { status: 429 });
   if (waiting >= MAX_WAITING) return Response.json({ error: "The brain is busy. Try again soon." }, { status: 429 });
-  const raw = await readCapped(req, 64 * KB);
-  if (raw === null) return tooLarge();
+  if (!allow(clientIp(req)) || !allowGlobal()) return Response.json({ error: "Too many messages. Wait a minute." }, { status: 429 });
+  waiting++; // reserved before any await, so parallel calls can't overfill the queue
+  let reserved = true;
+  const release = () => {
+    if (reserved) {
+      reserved = false;
+      waiting--;
+    }
+  };
+  const raw = await readCapped(req, 64 * KB).catch(() => null);
+  if (raw === null) {
+    release();
+    return tooLarge();
+  }
   let persona_: Persona;
   let prompt: string;
   try {
@@ -106,11 +128,13 @@ export async function POST(req: Request) {
       natures,
     };
   } catch {
+    release();
     return Response.json({ error: "bad request" }, { status: 400 });
   }
-  waiting++;
   const run = queue.then(() => {
-    waiting--;
+    release();
+    // the player gave up (the client stops waiting after 60 s): don't spend the model on it
+    if (req.signal.aborted) return "";
     return ask(persona_, prompt);
   });
   queue = run.catch(() => {});

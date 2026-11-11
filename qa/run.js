@@ -221,6 +221,7 @@ if (require.main === module && process.argv.includes("--count-orders")) {
     // 1. static checks
     step("contract unit tests", "cargo", [TOOLCHAIN, "test", "--lib", "--quiet"], { cwd: path.join(REPO, "contract") });
     step("worker unit tests", "node", ["--test"], { cwd: path.join(REPO, "worker") });
+    step("SDK unit tests", "node", ["--test"], { cwd: path.join(REPO, "sdk") });
     step("site typecheck", "npx", ["tsc", "--noEmit", "-p", "."], { cwd: path.join(REPO, "web") });
     step("site lint", "npx", ["eslint", "components", "lib", "app"], { cwd: path.join(REPO, "web") });
 

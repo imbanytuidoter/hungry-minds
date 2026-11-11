@@ -11,6 +11,7 @@ It exits 0 only when nothing failed, and then writes `qa/out/last-pass.json` wit
 | Step | What it checks |
 |---|---|
 | contract unit tests, worker unit tests, site typecheck + lint | the code itself |
+| SDK unit tests | the agent SDK in `sdk/` (`mindGuard`, the checks `hireMind` runs on a 402 offer) |
 | wasm build, QA deploy, QA site build | what's tested is what would ship |
 | official agents on real data | each of the six official agents against Polymarket, FastNEAR, NEAR RPC, Rhea, Burrow, NEAR Intents |
 | connector kinds | HTTPS and OpenAI-compatible agents (wrong key refused, questions, files) |
@@ -23,6 +24,8 @@ It exits 0 only when nothing failed, and then writes `qa/out/last-pass.json` wit
 | data services need an agent | the contract refuses them while a Mind has no agent |
 | NFT standard | wallets and outside marketplaces: NEP-171/177/178/181/199 views and transfers |
 | live smoke (read only, when :3000 is up) | first visit, every tab |
+
+That is 27 steps and a check that the servers came up, plus the 2 live-smoke steps when :3000 is up.
 
 Options: `--skip-build` reuses the last builds (no QA redeploy), `--no-ui` skips Chrome, `--no-near-ai` answers with the open model instead of NEAR AI (no NEAR AI credits spent; the Verified check is skipped), `--only="<name>"` runs just the steps whose name contains it (no stamp).
 

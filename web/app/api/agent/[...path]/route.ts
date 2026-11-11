@@ -32,7 +32,21 @@ async function forward(req: Request, path: string[]) {
       if (v) headers.set(h, v);
     }
     return new Response(res.body, { status: res.status, headers });
-  } catch {
+  } catch (e) {
+    // Our own deadline ran out: the worker may still be working (a paid x402 call may already
+    // have placed the order), so this is not "offline" and not something to simply resend.
+    const name = (e as { name?: string } | null)?.name;
+    if (name === "TimeoutError" || name === "AbortError") {
+      const paid = path[0] === "x402" && req.method === "POST" && (fwd["x-payment"] || fwd["payment-signature"]);
+      return Response.json(
+        {
+          error: paid
+            ? "The agent gateway took too long to answer. Your payment may still have gone through: check your order (jobs_of) before paying again."
+            : "The agent gateway took too long to answer. Try again in a minute.",
+        },
+        { status: 504 }
+      );
+    }
     return Response.json({ error: "The agent gateway is offline. Try again in a minute." }, { status: 503 });
   }
 }

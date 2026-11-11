@@ -12,7 +12,7 @@ const serif = DM_Serif_Display({ subsets: ["latin"], variable: "--font-dm-serif"
 // display faces of the colour themes (game.css)
 // variable faces only: Google serves some fixed weight sets with URLs next/font can't load
 const grotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-grotesk" });
-const fraunces = Fraunces({ subsets: ["latin"], variable: "--font-fraunces", style: ["normal", "italic"] });
+const fraunces = Fraunces({ subsets: ["latin"], variable: "--font-fraunces", style: ["normal", "italic"], axes: ["SOFT", "WONK", "opsz"] });
 const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
 
 export const metadata: Metadata = {

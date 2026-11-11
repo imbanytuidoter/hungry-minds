@@ -59,7 +59,12 @@ async function proofFor({ base, key, model, requestBody, responseBody, chatId })
   };
 }
 
-/** Reasoning models think out loud between <think> tags; the Mind only says the answer. */
-const stripThinking = (s) => String(s || "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/^[\s\S]*<\/think>/i, "").trim();
+/** Reasoning models think out loud between <think> tags; the Mind only says the answer. A
+ *  <think> that never closes (the model ran out of tokens mid-thought) holds no answer at all:
+ *  the reply is empty (a failure), never the half-finished reasoning. */
+const stripThinking = (s) => {
+  const out = String(s || "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/^[\s\S]*<\/think>/i, "");
+  return /<think>/i.test(out) ? "" : out.trim();
+};
 
 module.exports = { verifySignature, fetchSignature, proofFor, stripThinking, sha256 };

@@ -13,6 +13,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { checkSignIn, issueToken, readToken } = require("./chat-auth");
 const { Ledger } = require("./chat-ledger");
+const { makeRateLimiter, scrubUrls } = require("./gateway/limits");
 
 const PORT = parseInt(process.env.CHAT_PORT || "8788", 10);
 const SETTLE_EVERY_MS = parseInt(process.env.SETTLE_EVERY_MS || "60000", 10);
@@ -100,8 +101,24 @@ function readBody(req, limit = 20_000) {
   });
 }
 
-function startChatServer({ account, view, contractId, workerId, askLLM, plan = null, proofOf = () => null, fallbackReply, cleanReply, dir, gateway = null, x402 = null }) {
+// The live views behind the public /allowance (live_state, live_balance, chat_credits_of) are
+// kept this long per (Mind, account), so a page polling it can't turn into an RPC flood. A chat
+// message always reads them fresh.
+const LIVE_CACHE_MS = 5_000;
+// Messages to a Mind with an agent run the colony planner (which shares the paid replies' model
+// queue) to decide where they go: at most this many a minute per account.
+const ROUTED_PER_MIN = 10;
+// After her agent fails a chat message, messages to her go to her own voice this long instead
+// of hitting the agent (and the planner) again for free.
+const AGENT_COOLDOWN_MS = 60_000;
+
+// `hasModel`: a model is configured (index.js: !!LLM). With a model, an empty reply is a
+// failure (nothing is charged), never a phrasebook line someone pays for; only with no model at
+// all is the phrasebook her voice. Defaults to true, the safe side.
+function startChatServer({ account, view, contractId, workerId, askLLM, hasModel = true, plan = null, proofOf = () => null, fallbackReply, cleanReply, dir, gateway = null, x402 = null }) {
   const secret = secretFor(dir, contractId);
+  const routed = makeRateLimiter(ROUTED_PER_MIN);
+  const agentFailed = new Map(); // mind id -> when her agent last failed a chat message
   const ledger = new Ledger(path.join(dir, `.chat-ledger-${contractId}.json`));
   const log = path.join(dir, `.chat-log-${contractId}.jsonl`);
   const history = new Map(); // `${mind}|${payer}` -> [{role, content}]
@@ -125,30 +142,63 @@ function startChatServer({ account, view, contractId, workerId, askLLM, plan = n
     if (minds.size > 500) minds.delete(minds.keys().next().value);
     return v;
   }
+  // live_state / live_balance / chat_credits_of, kept LIVE_CACHE_MS for the public /allowance;
+  // `fresh` (a chat message) reads the chain and refreshes the cache.
+  const live = new Map();
+  async function liveView(method, args, fresh) {
+    const k = `${method}|${JSON.stringify(args)}`;
+    const hit = live.get(k);
+    if (!fresh && hit && Date.now() - hit.at < LIVE_CACHE_MS) return hit.v;
+    const v = await view(method, args);
+    live.set(k, { at: Date.now(), v });
+    if (live.size > 2000) live.delete(live.keys().next().value);
+    return v;
+  }
   // Messages being answered right now, per Mind: not in the ledger yet, but each will cost her
-  // a thought, so two people can't both take her last one.
-  const thinking = new Map();
+  // a thought, so two people can't both take her last one. Each message takes a numbered ticket
+  // BEFORE its first await, and its food check counts only the tickets taken before it: of
+  // concurrent messages on her last thought, the first one gets it and the others are refused.
+  const thinking = new Map(); // mind id -> Set of tickets
+  let lastTicket = 0;
+  function reserve(mindId) {
+    const t = ++lastTicket;
+    if (!thinking.has(mindId)) thinking.set(mindId, new Set());
+    thinking.get(mindId).add(t);
+    return t;
+  }
+  function release(mindId, t) {
+    const s = thinking.get(mindId);
+    if (!s) return;
+    s.delete(t);
+    if (!s.size) thinking.delete(mindId);
+  }
+  function inThought(mindId, before = Infinity) {
+    let n = 0;
+    for (const t of thinking.get(mindId) || []) if (t < before) n++;
+    return n;
+  }
 
   // How many more messages this payer may send this Mind right now. Every message, the
   // keeper's or a guest's, is paid at settlement with a thought from HER food (settle_one
   // skips, uncharged, what her food can't cover), so both must fit in her food after all the
-  // unsettled messages on her; a guest's must also fit in their chat credits.
-  async function allowance(mindId, payer, { fresh = false } = {}) {
+  // unsettled messages on her; a guest's must also fit in their chat credits. `ticket`: the
+  // caller's own reservation (not counted against it, nor any taken after it).
+  async function allowance(mindId, payer, { fresh = false, ticket = Infinity } = {}) {
     const mind = await mindOf(mindId, fresh);
     if (!mind) return { error: "no such Mind" };
-    const state = (await view("live_state", { id: mindId })) || "asleep";
+    const state = (await liveView("live_state", { id: mindId }, fresh)) || "asleep";
     const own = mind.owner === payer;
     const { cost, price } = await prices();
     if (state === "ghost") return { mind, state, own, left: 0, error: "Ghosts don't answer." };
-    const bal = yocto(await view("live_balance", { id: mindId }));
-    const owed = BigInt(ledger.pendingOnMind(mindId) + (thinking.get(mindId) || 0)) * cost;
+    const bal = yocto(await liveView("live_balance", { id: mindId }, fresh));
+    const owed = BigInt(ledger.pendingOnMind(mindId) + inThought(mindId, ticket)) * cost;
     const food = cost > 0n ? (bal > owed ? Number((bal - owed) / cost) : 0) : Infinity;
     if (own) {
       const left = Number.isFinite(food) ? food : 0;
       return { mind, state, own, left, error: left < 1 || state === "asleep" ? `${mind.name} is too hungry to talk. Feed her first.` : null };
     }
     if (state === "asleep") return { mind, state, own, left: 0, error: `${mind.name} is asleep. Anyone can feed her to wake her.` };
-    const credits = yocto(await view("chat_credits_of", { account_id: payer }));
+    const credits = yocto(await liveView("chat_credits_of", { account_id: payer }, fresh));
     const unpaid = BigInt(ledger.pendingGuest(payer)) * price;
     const paid = price > 0n ? (credits > unpaid ? Number((credits - unpaid) / price) : 0) : 0;
     const left = Math.min(paid, food);
@@ -167,12 +217,11 @@ function startChatServer({ account, view, contractId, workerId, askLLM, plan = n
     if (!Number.isInteger(mindId) || mindId < 0 || !prompt || Buffer.byteLength(prompt) > maxBytes) return [400, { error: "bad message" }];
     if (busy.has(payer)) return [429, { error: "wait for her reply first" }];
     busy.add(payer);
-    let counted = false;
+    // her thought is reserved before anything is awaited (released in `finally`, whatever happens)
+    const ticket = reserve(mindId);
     try {
-      const a = await allowance(mindId, payer, { fresh: true });
+      const a = await allowance(mindId, payer, { fresh: true, ticket });
       if (a.error) return [402, { error: a.error, left: a.left ?? 0, own: a.own }];
-      thinking.set(mindId, (thinking.get(mindId) || 0) + 1);
-      counted = true;
       const look = await view("get_look", { id: mindId }).catch(() => null);
       const who = { ...a.mind, state: a.state, natures: look?.natures || [] };
       const key = `${mindId}|${payer}`;
@@ -185,14 +234,20 @@ function startChatServer({ account, view, contractId, workerId, askLLM, plan = n
       // it doesn't serve the new owner's chat; she answers in her own voice until they
       // connect their own agent (the gateway refuses it too).
       if (agent?.connectedBy && agent.connectedBy !== a.mind.owner) agent = null;
-      const via = agent && (await forAgent(agent, payer, prompt, past)) ? agent.name : null;
+      // An agent that just failed is left alone for a minute: meanwhile she answers herself, so
+      // a broken agent can't be hammered (each message also runs the planner) for free.
+      const cooling = agent && Date.now() - (agentFailed.get(mindId) ?? -Infinity) < AGENT_COOLDOWN_MS;
+      if (agent && !cooling && !routed(payer)) return [429, { error: `Her agent takes at most ${ROUTED_PER_MIN} messages a minute from one person: wait a little. Nothing was charged.` }];
+      const via = agent && !cooling && (await forAgent(agent, payer, prompt, past)) ? agent.name : null;
       if (via) {
         // Her agent answers; if it can't, nothing is charged.
         try {
           reply = await gateway.chat(mindId, payer, prompt);
         } catch (e) {
+          agentFailed.set(mindId, Date.now());
+          if (agentFailed.size > 5000) agentFailed.delete(agentFailed.keys().next().value);
           console.error(`chat mind ${mindId}: her agent failed:`, e.message);
-          return [502, { error: `Her agent didn't answer (${e.message.slice(0, 120)}). Nothing was charged.` }];
+          return [502, { error: `Her agent didn't answer (${scrubUrls(e.message).slice(0, 120)}). Nothing was charged; for the next minute she answers herself.` }];
         }
       } else {
         if (agent) who.agent = agent;
@@ -204,7 +259,15 @@ function startChatServer({ account, view, contractId, workerId, askLLM, plan = n
           console.error(`chat mind ${mindId}: model failed, nothing charged:`, e.message);
           return [503, { error: "She couldn't think of an answer just now (the model is busy). Try again in a minute: nothing was charged." }];
         }
-        if (!reply) reply = cleanReply(fallbackReply(who, prompt, Date.now()));
+        if (!reply) {
+          // An empty answer from a configured model (it ran out of tokens while thinking, or
+          // said nothing) is a failure like a throw, not a cue for a paid canned line.
+          if (hasModel) {
+            console.error(`chat mind ${mindId}: the model gave an empty reply, nothing charged`);
+            return [503, { error: "She couldn't think of an answer just now: no reply, nothing was charged. Try again in a minute." }];
+          }
+          reply = cleanReply(fallbackReply(who, prompt, Date.now()));
+        }
       }
       if (!reply) return [502, { error: "no reply, nothing was charged" }];
       // NEAR AI's signature over this exact reply, when the colony's TEE model wrote it
@@ -212,16 +275,14 @@ function startChatServer({ account, view, contractId, workerId, askLLM, plan = n
       ledger.add(mindId, payer, a.own, prompt, reply);
       fs.appendFile(log, JSON.stringify({ ts: Date.now(), mind: mindId, payer, own: a.own, prompt, reply, proof, via }) + "\n", () => {});
       history.set(key, [...past, { role: "user", content: prompt }, { role: "assistant", content: reply }].slice(-HISTORY_TURNS * 2));
+      // bound the map over the worker's lifetime: drop the least recently used conversation
+      if (history.size > 5000) history.delete(history.keys().next().value);
       console.log(`chat mind ${mindId} ← ${payer}${a.own ? " (keeper)" : ""}: ${reply.slice(0, 60)}`);
       if (ledger.rows().reduce((n, r) => n + r.count, 0) >= SETTLE_AT) settleSoon();
       return [200, { reply, own: a.own, left: a.left - 1, proof, via }];
     } finally {
       busy.delete(payer);
-      if (counted) {
-        const n = (thinking.get(mindId) || 1) - 1;
-        if (n > 0) thinking.set(mindId, n);
-        else thinking.delete(mindId);
-      }
+      release(mindId, ticket);
     }
   }
 

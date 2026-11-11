@@ -311,8 +311,13 @@ const MAX_MSGS = 60;
 
 function readFeel(key: string): Record<number, Feel> {
   try {
-    // the old key held every account's chats together: it can't be split, so it goes
-    localStorage.removeItem("hm-live-feel");
+    // the old key held every account's chats together: it moves once to the first account that
+    // signs in on this browser (usually its only one), then it is gone
+    const old = localStorage.getItem("hm-live-feel");
+    if (old !== null) {
+      if (localStorage.getItem(key) === null) localStorage.setItem(key, old);
+      localStorage.removeItem("hm-live-feel");
+    }
     const f: Record<number, Feel> = JSON.parse(localStorage.getItem(key) || "{}");
     // Mood saved before it had a timestamp starts ageing from now.
     if (Object.values(f).some((x) => !x.ts)) {

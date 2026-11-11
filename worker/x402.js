@@ -43,11 +43,69 @@ const MAX_USED = 10_000;
 // see) waits this long before the worker pays gas for them again.
 const REFUSED_BLOCK_MS = 10 * 60_000;
 const MAX_FORM_DEPTH = 64; // serde_json gives up at 128; well inside that
+// The contract's own limits (agents.rs), checked before a relay so a full queue costs no gas.
+const MAX_OPEN_JOBS = 1000; // open jobs in the whole contract
+const MAX_OPEN_PER_MIND = 20; // open jobs waiting on one Mind
+const MAX_OPEN_PER_BUYER_MIND = 5; // open jobs of one buyer on one Mind
+const MAX_BUYER_JOBS = 50; // jobs of one buyer not yet closed
+// A paid call ends within this (preflight, relay, read-back and the short wait for a quick
+// delivery), well inside the site proxy's 200 s, so the buyer hears from us, not a dead socket.
+const TOTAL_MS = 150_000;
+const RPC_MS = 8_000; // each view / RPC read on the paid path
+const RELAY_MIN_LEFT = 60_000; // with less than this left, don't start a relay at all (503: try again)
+// Contract refusals the buyer can't fix by sending a better payment (the Mind's state, the
+// queue, a price changed under them, our own gas setting): no 10-minute block for these.
+const NOT_BUYERS_FAULT = /she is asleep|jobs waiting|queue is full|service is paused|needs her agent|a ghost takes|attach the price plus|no such service|no such Mind|could not be unwrapped|attach more gas/i;
+
+/** True if serde_json (without float_roundtrip) would refuse this JSON number literal as out
+ *  of range: an integer literal of more than 308 digits, or any value whose magnitude, as
+ *  written, is above f64::MAX (JSON.parse rounds 1.7976931348623158e308 down to MAX; serde's
+ *  faster parse can overflow there). Compared on the decimal digits, not on a rounded double. */
+const F64_MAX_DIGITS = "17976931348623157"; // f64::MAX = 1.7976931348623157e308
+function numberTooBig(lit) {
+  const m = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(lit);
+  if (!m) return false;
+  const [, int, frac = "", e] = m;
+  if (!frac && e === undefined && int.length > 308) return true;
+  const all = int + frac;
+  const lead = all.search(/[1-9]/);
+  if (lead < 0) return false; // zero
+  const exp = int.length - lead - 1 + Number(e || 0); // the value is d.ddd × 10^exp
+  if (exp !== 308) return exp > 308;
+  const sig = all.slice(lead).replace(/0+$/, "");
+  const n = Math.max(sig.length, F64_MAX_DIGITS.length);
+  return sig.padEnd(n, "0") > F64_MAX_DIGITS.padEnd(n, "0");
+}
+/** Every number literal in a JSON text (strings skipped). */
+function numberLiterals(raw) {
+  const out = [];
+  const num = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+  for (let i = 0; i < raw.length; ) {
+    const c = raw[i];
+    if (c === '"') {
+      for (i++; i < raw.length && raw[i] !== '"'; i += raw[i] === "\\" ? 2 : 1);
+      i++;
+    } else if (c === "-" || (c >= "0" && c <= "9")) {
+      num.lastIndex = i;
+      const m = num.exec(raw);
+      if (!m) {
+        i++;
+        continue;
+      }
+      out.push(m[0]);
+      i = num.lastIndex;
+    } else i++;
+  }
+  return out;
+}
 
 /** Why serde_json (the contract) would refuse this form input that JSON.parse took, or null.
  *  JSON.parse turns 1e400 into Infinity, keeps lone surrogate escapes ("\ud800") as broken
- *  strings and nests as deep as asked; serde_json refuses all three. Pure: unit-tested. */
-function serdeRefuses(value) {
+ *  strings and nests as deep as asked; serde_json refuses all three. With `raw` (the text that
+ *  was parsed) the number literals are checked as written too (see numberTooBig). Pure:
+ *  unit-tested. */
+function serdeRefuses(value, raw) {
+  if (typeof raw === "string" && numberLiterals(raw).some(numberTooBig)) return "the JSON input has a number too large to store";
   const walk = (v, depth) => {
     if (depth > MAX_FORM_DEPTH) return `the JSON input nests deeper than ${MAX_FORM_DEPTH} levels`;
     if (typeof v === "number") return Number.isFinite(v) ? null : "the JSON input has a number too large to store";
@@ -68,6 +126,12 @@ const wrapOf = (network) => (network === "mainnet" ? "wrap.near" : "wrap.testnet
 const b64json = (s) => JSON.parse(Buffer.from(String(s), "base64").toString("utf8"));
 const toB64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** `pr`, or a rejection ({ timeout: true }) after `ms`: near-api-js retries a failing RPC for
+ *  minutes, longer than a buyer's HTTP call can wait. */
+const within = (pr, ms) => {
+  let t;
+  return Promise.race([pr, new Promise((_, rej) => (t = setTimeout(() => rej(Object.assign(new Error("the RPC timed out"), { timeout: true })), Math.max(1, ms))))]).finally(() => clearTimeout(t));
+};
 
 /** Decode and check a signed delegate against the row the buyer accepted. Returns
  *  { signed, sender, serviceId, input } or throws with the reason. Pure: unit-tested. */
@@ -232,18 +296,28 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     return v;
   }
 
-  /** The rows for the services she can take right now (live, awake, agent present if needed). */
+  /** The rows for the services she can take right now (live, awake, agent present if needed).
+   *  A view that fails throws (the caller answers 503 "try again"): guessing "no schema", "no
+   *  minimum price" or "awake" from a failed read would relay orders the contract refuses. */
   async function readOffer(mindId) {
-    const mind = await view("get_mind", { id: mindId }).catch(() => null);
+    const v = (m, a) => within(view(m, a), RPC_MS);
+    const mind = await v("get_mind", { id: mindId });
     if (!mind) return null;
-    const state = await view("live_state", { id: mindId }).catch(() => null);
-    const awake = !mind.ghost && state !== "asleep" && state !== "ghost";
-    if (Date.now() - paramsCache.at > 60_000) paramsCache = { at: Date.now(), v: await view("params", {}).catch(() => null) };
+    const state = await v("live_state", { id: mindId });
+    const awake = !mind.ghost && !!state && state !== "asleep" && state !== "ghost";
+    if (Date.now() - paramsCache.at > 60_000 || !paramsCache.v) {
+      const p = await v("params", {});
+      if (!p) throw new Error("params unavailable");
+      paramsCache = { at: Date.now(), v: p };
+    }
     const min = BigInt(paramsCache.v?.guest_min_price || "0");
-    const hasAgent = !!(await view("agent_of", { mind_id: mindId }).catch(() => null));
-    const all = (await view("services_for_mind", { mind_id: mindId }).catch(() => [])).filter((s) => s.live);
+    const agentInfo = await v("agent_of", { mind_id: mindId });
+    const agent = typeof agentInfo === "string" ? agentInfo : agentInfo?.account || null;
+    const hasAgent = !!agentInfo;
+    const all = ((await v("services_for_mind", { mind_id: mindId })) || []).filter((s) => s.live);
     const services = awake ? all.filter((s) => s.category >= AGENT_ONLY_CATEGORIES || hasAgent) : [];
-    const schemas = services.length ? await view("input_schemas", { ids: services.map((s) => s.id) }).catch(() => services.map(() => null)) : [];
+    const schemas = services.length ? await v("input_schemas", { ids: services.map((s) => s.id) }) : [];
+    if (services.length && (!Array.isArray(schemas) || schemas.length !== services.length)) throw new Error("input_schemas unavailable");
     const rows = services.map((s, i) => {
       const price = BigInt(s.price) > min ? BigInt(s.price) : min;
       const amount = (price + JOB_DEPOSIT).toString();
@@ -269,7 +343,7 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
         },
       };
     });
-    return { mind, awake, services, rows };
+    return { mind, awake, services, rows, owner: mind.owner || null, agent };
   }
 
   async function card(mindId) {
@@ -296,16 +370,18 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
 
   async function taskView(jobId, mindId) {
     const id = taskId(jobId);
-    const job = await view("get_job", { job_id: jobId }).catch(() => null);
+    const job = await within(view("get_job", { job_id: jobId }), RPC_MS);
     if (!job) {
-      // closed (close_job deletes the record) or not visible yet on this RPC node
-      const full = gateway?.resultOf?.(jobId);
+      // closed (close_job deletes the record) or not visible yet on this RPC node: the full
+      // result only if the gateway saw this job delivered (never one it stored and then failed
+      // to deliver: that job may have been refunded)
+      const full = gateway?.resultOf?.(jobId, null);
       if (full) return { id, contextId: id, status: { state: "TASK_STATE_COMPLETED" }, artifacts: [{ artifactId: `job-${jobId}`, parts: [{ text: full.text || "" }] }], metadata: { job_id: jobId } };
       return { id, contextId: id, status: { state: "TASK_STATE_WORKING" }, metadata: { job_id: jobId } };
     }
     if (job.mind_id !== mindId) return null;
     if (job.status === "Delivered") {
-      const full = gateway?.resultOf?.(jobId);
+      const full = gateway?.resultOf?.(jobId, job.status);
       const parts = [{ text: full?.text || job.result || "" }];
       for (const f of full?.files || []) parts.push({ text: `[file] ${f.name} (${f.mime}, ${f.size} bytes, sha256 ${f.sha256})` });
       return { id, contextId: id, status: { state: "TASK_STATE_COMPLETED" }, artifacts: [{ artifactId: `job-${jobId}`, parts }], metadata: { job_id: jobId, buyer: job.buyer } };
@@ -318,42 +394,70 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
 
   /** Everything the chain must agree to before the worker spends gas on a relay: the
    *  delegate (signature, key, nonce window, expiry window), the buyer's wNEAR, and the
-   *  contract's own order checks it can see from outside (form, open orders). */
-  async function preflight(p, row) {
-    if (!signatureOk(p.signed)) return "the delegate's signature is not valid";
+   *  contract's own order checks it can see from outside (self-order, form, the buyer's open
+   *  orders, her queue, the contract's queue). Returns null, or { why, kind }: kind "buyer" (a
+   *  refusal the buyer controls: 402), "state" (the Mind or the queue: 409, nothing the buyer
+   *  did wrong) or "retry" (a read failed or timed out: 503, never relayed on a guess).
+   *  `dl`: the paid call's deadline (every RPC here ends by it, at most RPC_MS each). */
+  async function preflight(p, row, o, mindId, dl) {
+    const lim = (pr) => within(pr, Math.min(RPC_MS, dl - Date.now()));
+    const buyer = (why) => ({ why, kind: "buyer" });
+    const state = (why) => ({ why, kind: "state" });
+    const retry = { why: "the chain could not be read just now: try again in a moment (nothing was sent)", kind: "retry" };
+    if (!signatureOk(p.signed)) return buyer("the delegate's signature is not valid");
     const d = p.signed.delegateAction;
     const kid = `${p.sender}:${keyOf(d).toString()}`;
-    if (BigInt(d.nonce) <= (topNonce.get(kid) ?? -1n)) return "the delegate's nonce is already used: sign a new payment";
-    let key;
-    try {
-      key = await provider.query({ request_type: "view_access_key", finality: "optimistic", account_id: p.sender, public_key: keyOf(d).toString() });
-    } catch {
-      return `${keyOf(d).toString()} is not a key of ${p.sender}`;
-    }
-    if (key.permission !== "FullAccess") return "sign with a full-access key (ft_transfer_call attaches 1 yoctoNEAR)";
-    if (BigInt(d.nonce) <= BigInt(key.nonce)) return "the delegate's nonce is already used: sign a new payment";
-    if (BigInt(d.nonce) > BigInt(key.nonce) + 1_000_000n) return "the delegate's nonce is too far ahead of the key's: sign with the key's next nonce";
-    const { header } = await provider.block({ finality: "optimistic" });
-    if (BigInt(d.maxBlockHeight) < BigInt(header.height) + 100n) return "the delegate expires too soon (give it at least 100 blocks): sign a new payment";
-    if (BigInt(d.maxBlockHeight) > BigInt(header.height) + 2_000n) return "the delegate lives too long (at most 2000 blocks)";
-    const bal = await ftView("ft_balance_of", { account_id: p.sender }).catch(() => "0");
-    if (BigInt(bal || "0") < BigInt(p.amount)) return `${p.sender} holds too little wNEAR on ${wrap}: wrap NEAR first (near_deposit)`;
+    if (BigInt(d.nonce) <= (topNonce.get(kid) ?? -1n)) return buyer("the delegate's nonce is already used: sign a new payment");
+    // the contract refuses these orders (order_checks): her owner, or her agent, buying her services
+    if (o.owner && p.sender === o.owner) return buyer("you can't order your own Mind's services");
+    if (o.agent && p.sender === o.agent) return buyer("her own agent can't order her services");
     const schema = row.extra.input_schema;
     if (schema) {
       let v;
       try {
         v = JSON.parse(p.input);
       } catch {
-        return "this service takes its form as JSON input (see extra.input_schema)";
+        return buyer("this service takes its form as JSON input (see extra.input_schema)");
       }
-      const strict = serdeRefuses(v);
-      if (strict) return strict;
-      for (const f of Array.isArray(schema.required) ? schema.required : []) {
-        if (v?.[f] === undefined || v[f] === null || v[f] === "") return `missing field: ${f}`;
+      const strict = serdeRefuses(v, p.input);
+      if (strict) return buyer(strict);
+      const required = Array.isArray(schema.required) ? schema.required.filter((f) => typeof f === "string") : [];
+      // serde's Value::get on an array or a scalar finds no field: only a plain object can carry them
+      const plain = v !== null && typeof v === "object" && !Array.isArray(v);
+      for (const f of required) {
+        if (!plain || !Object.hasOwn(v, f) || v[f] === null || v[f] === "") return buyer(`missing field: ${f}`);
       }
     }
-    const open = await view("jobs_of", { account_id: p.sender }).catch(() => []);
-    if (open.length >= 50) return "you have 50 orders not yet closed: close finished ones first (close_job)";
+    let key;
+    try {
+      key = await lim(provider.query({ request_type: "view_access_key", finality: "optimistic", account_id: p.sender, public_key: keyOf(d).toString() }));
+    } catch (e) {
+      // "does not exist": a real answer about the key or account; anything else is the RPC
+      if (!e?.timeout && /does not exist|UNKNOWN_ACCESS_KEY|UNKNOWN_ACCOUNT|AccessKeyDoesNotExist|AccountDoesNotExist/i.test(String(e?.message || e) + String(e?.type || ""))) return buyer(`${keyOf(d).toString()} is not a key of ${p.sender}`);
+      return retry;
+    }
+    if (!key || key.nonce === undefined) return retry;
+    if (key.permission !== "FullAccess") return buyer("sign with a full-access key (ft_transfer_call attaches 1 yoctoNEAR)");
+    if (BigInt(d.nonce) <= BigInt(key.nonce)) return buyer("the delegate's nonce is already used: sign a new payment");
+    if (BigInt(d.nonce) > BigInt(key.nonce) + 1_000_000n) return buyer("the delegate's nonce is too far ahead of the key's: sign with the key's next nonce");
+    let height, bal, mine, mindOpen, allOpen;
+    try {
+      height = BigInt((await lim(provider.block({ finality: "optimistic" }))).header.height);
+      bal = await lim(ftView("ft_balance_of", { account_id: p.sender }));
+      mine = await lim(view("jobs_of", { account_id: p.sender }));
+      mindOpen = Number(await lim(view("open_count_of", { mind_id: mindId })));
+      allOpen = Number(await lim(view("open_job_count", {})));
+    } catch {
+      return retry;
+    }
+    if (!Array.isArray(mine) || !Number.isFinite(mindOpen) || !Number.isFinite(allOpen) || (typeof bal !== "string" && typeof bal !== "number")) return retry;
+    if (BigInt(d.maxBlockHeight) < height + 100n) return buyer("the delegate expires too soon (give it at least 100 blocks): sign a new payment");
+    if (BigInt(d.maxBlockHeight) > height + 2_000n) return buyer("the delegate lives too long (at most 2000 blocks)");
+    if (BigInt(bal || "0") < BigInt(p.amount)) return buyer(`${p.sender} holds too little wNEAR on ${wrap}: wrap NEAR first (near_deposit)`);
+    if (mine.length >= MAX_BUYER_JOBS) return buyer(`you have ${MAX_BUYER_JOBS} orders not yet closed: close finished ones first (close_job)`);
+    if (mine.filter((j) => j?.mind_id === mindId && j?.status === "Open").length >= MAX_OPEN_PER_BUYER_MIND) return buyer(`you already have ${MAX_OPEN_PER_BUYER_MIND} open jobs with her: wait for one to finish`);
+    if (mindOpen >= MAX_OPEN_PER_MIND) return state(`she has ${MAX_OPEN_PER_MIND} jobs waiting: try again when one is delivered`);
+    if (allOpen >= MAX_OPEN_JOBS) return state("the job queue is full, try again later");
     return null;
   }
 
@@ -364,16 +468,15 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
    *  runs through several receipts (transfer, unwrap, order), and a public RPC may give up
    *  waiting ("Internal server error", a timeout) while it still lands, so on an RPC error the
    *  outcome is read back by hash instead of reporting a failure that did not happen. */
-  async function relay(p) {
+  async function relay(p, dl = Date.now() + TOTAL_MS) {
     const action = new transactions.Action({ signedDelegate: { delegateAction: p.signed.delegateAction, signature: p.signed.signature } });
     // near-api-js retries a failing RPC call with growing pauses for minutes; the buyer's HTTP
     // call can't wait that long, so every call here has its own short deadline, and the outcome
-    // is read back by hash in short polls.
-    const within = (pr, ms) => Promise.race([pr, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("the RPC timed out"), { timeout: true })), ms))]);
+    // is read back by hash in short polls, until the paid call's deadline `dl`.
     const readBack = async (txHash, ms) => {
       const until = Date.now() + ms;
       while (Date.now() < until) {
-        const out = await within(provider.txStatus(txHash, account.accountId, "EXECUTED_OPTIMISTIC"), 12_000).catch(() => null);
+        const out = await within(provider.txStatus(txHash, account.accountId, "EXECUTED_OPTIMISTIC"), Math.min(12_000, until - Date.now())).catch(() => null);
         if (out?.receipts_outcome?.length) return out;
         await sleep(2500);
       }
@@ -384,7 +487,7 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
       const txHash = utils.serialize.base_encode(hash);
       try {
         // wait only until it is in a block (that is when a bad nonce or key would be refused)
-        await within(provider.sendTransactionUntil(signedTx, "INCLUDED"), 25_000);
+        await within(provider.sendTransactionUntil(signedTx, "INCLUDED"), Math.min(25_000, dl - Date.now() - 5_000));
       } catch (e) {
         // the worker's key also signs replies and deliveries: on a nonce clash, sign again fresh,
         // unless the previous attempt did land after all
@@ -397,13 +500,14 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
         }
         if (!e.timeout && !maybeLanded(e)) throw Object.assign(e, { rejected: true });
       }
-      const out = await readBack(txHash, 75_000);
+      const out = await readBack(txHash, dl - Date.now() - 2_000);
       if (out) return out;
       throw Object.assign(new Error(`the transaction ${txHash} did not show up in time; it may still land, check it on the explorer`), { unknown: true, txHash });
     }
   }
 
   async function sendMessage(mindId, params, paymentHeader, rpcId) {
+    const dl = Date.now() + TOTAL_MS; // the whole paid call, preflight included
     const msg = params?.message || {};
     const text = textOf(msg);
     if (!text) return [400, rpcErr(rpcId, -32602, "the message has no text")];
@@ -414,7 +518,7 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     if (msg.taskId) {
       const jobId = jobOfTask(msg.taskId);
       if (jobId === null) return [404, rpcErr(rpcId, -32001, "unknown task")];
-      const job = await view("get_job", { job_id: jobId }).catch(() => null);
+      const job = await within(view("get_job", { job_id: jobId }), RPC_MS);
       if (!job || job.mind_id !== mindId) return [404, rpcErr(rpcId, -32001, "unknown task")];
       if (!gateway?.answerJob) return [409, rpcErr(rpcId, -32002, "this task is not waiting for an answer")];
       const err = await gateway.answerJob(jobId, text);
@@ -438,7 +542,14 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
       return need(e.message, rows);
     }
     const row = rows.find((r) => r.extra.service_id === p.serviceId);
-    if (used.has(p.dedupe)) return need("this payment was already used", rows);
+    // the same signed payment sent again (a client retrying after a timeout): it went to the
+    // chain already, so no 402 that invites paying twice
+    if (used.has(p.dedupe)) return [409, rpcErr(rpcId, -32006, `this payment was already relayed: check your order (jobs_of ${p.sender} on ${contractId}) before paying again`, { payer: p.sender })];
+    {
+      // its dedupe entry may have been evicted: the same key and nonce as the last relay is the same payment
+      const d0 = p.signed.delegateAction;
+      if (topNonce.get(`${p.sender}:${keyOf(d0).toString()}`) === BigInt(d0.nonce)) return [409, rpcErr(rpcId, -32006, `this payment was already relayed: check your order (jobs_of ${p.sender} on ${contractId}) before paying again`, { payer: p.sender })];
+    }
     const blockedFor = (refusedUntil.get(p.sender) || 0) - Date.now();
     if (blockedFor > 0) return [429, rpcErr(rpcId, -32003, `your last paid order was refused by the contract after it was relayed; try again in ${Math.ceil(blockedFor / 60_000)} min`)];
     if (inFlight.has(p.sender)) return [429, rpcErr(rpcId, -32003, "one paid call at a time per account")];
@@ -450,14 +561,21 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     inFlight.add(p.sender);
     let outcome;
     try {
-      const why = await preflight(p, row);
+      const why = await preflight(p, row, o, mindId, dl);
+      if (!why && dl - Date.now() < RELAY_MIN_LEFT) {
+        // the reads took so long that the relay could not be followed to the end: not now
+        relays.splice(relays.indexOf(t), 1);
+        return [503, rpcErr(rpcId, -32004, "the chain is slow right now: try again in a moment (nothing was sent)")];
+      }
       if (why) {
         relays.splice(relays.indexOf(t), 1);
-        return need(why, rows);
+        if (why.kind === "retry") return [503, rpcErr(rpcId, -32004, why.why)];
+        if (why.kind === "state") return [409, rpcErr(rpcId, -32002, why.why)];
+        return need(why.why, rows);
       }
       used.add(p.dedupe);
       if (used.size > MAX_USED) used.delete(used.values().next().value);
-      outcome = await relay(p);
+      outcome = await relay(p, dl);
       const d = p.signed.delegateAction; // it reached the chain: this nonce is spent for this key
       topNonce.set(`${p.sender}:${keyOf(d).toString()}`, BigInt(d.nonce));
     } catch (e) {
@@ -472,19 +590,26 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     const jobId = orderedJobId(outcome, p.sender);
     if (jobId === null) {
       // The worker paid the gas and the contract refused the order anyway (its tokens went
-      // back to the buyer): don't relay for this buyer again for a while.
-      refusedUntil.set(p.sender, Date.now() + REFUSED_BLOCK_MS);
-      if (refusedUntil.size > 5000) for (const [k, t] of refusedUntil) if (t < Date.now()) refusedUntil.delete(k);
+      // back to the buyer). If the buyer could have avoided it (their input, their balance,
+      // their key, ordering their own Mind...), don't relay for them again for a while; a
+      // refusal about her state or the queue (asleep, full, paused, price changed) is not theirs.
+      const reason = failureOf(outcome, p.sender);
+      if (!reason || !NOT_BUYERS_FAULT.test(reason)) {
+        refusedUntil.set(p.sender, Date.now() + REFUSED_BLOCK_MS);
+        if (refusedUntil.size > 5000) for (const [k, t] of refusedUntil) if (t < Date.now()) refusedUntil.delete(k);
+      }
+      return need(`the order was refused and nothing was charged (a refusal after the unwrap is refunded in NEAR): ${reason || "no job was placed"}`, rows);
     }
-    if (jobId === null) return need(`the order was refused and nothing was charged (a refusal after the unwrap is refunded in NEAR): ${failureOf(outcome, p.sender) || "no job was placed"}`, rows);
     console.log(`x402: ${p.sender} ordered job ${jobId} (service ${p.serviceId}, mind ${mindId}), tx ${outcome.transaction.hash}`);
 
-    // Give a quick agent the chance to finish inside this call.
-    let task = await taskView(jobId, mindId);
-    const until = Date.now() + WAIT_MS;
-    while (task?.status.state === "TASK_STATE_WORKING" && Date.now() < until) {
+    // Give a quick agent the chance to finish inside this call (and inside the deadline). The
+    // job is placed: a slow read only means the buyer gets a WORKING task to poll.
+    const working = { id: taskId(jobId), contextId: taskId(jobId), status: { state: "TASK_STATE_WORKING" }, metadata: { job_id: jobId } };
+    let task = (await taskView(jobId, mindId).catch(() => null)) || working;
+    const until = Math.min(Date.now() + WAIT_MS, dl - RPC_MS);
+    while (task?.status.state === "TASK_STATE_WORKING" && Date.now() + 2500 < until) {
       await sleep(2500);
-      task = (await taskView(jobId, mindId)) || task;
+      task = (await taskView(jobId, mindId).catch(() => null)) || task;
     }
     const receipt = { success: true, transaction: outcome.transaction.hash, network: `near:${network}`, payer: p.sender };
     return [200, { jsonrpc: "2.0", id: rpcId, result: { task } }, { "payment-response": toB64(receipt), "x-payment-response": toB64(receipt) }];
@@ -527,7 +652,14 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
     const m = /^\/agent\/x402\/(\d+)(\/\.well-known\/agent-card\.json)?$/.exec(url.pathname);
     if (!m) return out(404, { error: "not found" });
     const mindId = Number(m[1]);
-    if (req.method === "GET") return out(...(await card(mindId)));
+    if (req.method === "GET") {
+      try {
+        return out(...(await card(mindId)));
+      } catch (e) {
+        console.error("x402: chain read failed:", e?.message || e);
+        return out(503, { error: "the chain could not be read just now: try again in a moment" });
+      }
+    }
     if (req.method !== "POST" || m[2]) return out(405, { error: "use GET for the card, POST for A2A" });
     let body;
     try {
@@ -536,8 +668,15 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
       return out(e.status === 413 ? 413 : 400, rpcErr(null, -32700, e.status === 413 ? "the request is too large" : "parse error"));
     }
     const header = req.headers["x-payment"] || req.headers["payment-signature"] || "";
-    if (body?.method === "SendMessage" || body?.method === "message/send") return out(...(await sendMessage(mindId, body.params, header, body.id)));
-    if (body?.method === "GetTask" || body?.method === "tasks/get") return out(...(await getTask(mindId, body.params, body.id)));
+    try {
+      if (body?.method === "SendMessage" || body?.method === "message/send") return out(...(await sendMessage(mindId, body.params, header, body.id)));
+      if (body?.method === "GetTask" || body?.method === "tasks/get") return out(...(await getTask(mindId, body.params, body.id)));
+    } catch (e) {
+      // a view failed or timed out before anything was relayed (relay errors are answered
+      // inside sendMessage): never a guess, never a 402
+      console.error("x402: chain read failed:", e?.message || e);
+      return out(503, rpcErr(body?.id, -32004, "the chain could not be read just now: try again in a moment (nothing was sent)"));
+    }
     return out(400, rpcErr(body?.id, -32601, "supported methods: SendMessage, GetTask"));
   }
 
@@ -545,4 +684,4 @@ function makeX402({ view, account, contractId, network, secret, gateway = null, 
   return { route, card, isRegistered };
 }
 
-module.exports = { makeX402, checkPayment, serdeRefuses, signatureOk, orderedJobId, failureOf, JOB_DEPOSIT, wrapOf };
+module.exports = { makeX402, checkPayment, serdeRefuses, numberTooBig, signatureOk, orderedJobId, failureOf, JOB_DEPOSIT, wrapOf };

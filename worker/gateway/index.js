@@ -19,6 +19,7 @@ const crypto = require("crypto");
 const { KINDS, discover, run, guessArgs, firstJson, marketPaywall, MARKET_PAYWALL } = require("./connectors");
 const official = require("./official");
 const { checkUrl } = require("./safe-fetch");
+const { makeRateLimiter, publicUrl, scrubUrls } = require("./limits");
 
 const GAS = "100000000000000";
 const MAX_ONCHAIN = 2000; // the contract's MAX_JOB_RESULT
@@ -57,32 +58,28 @@ function trimSkills(skills) {
     ...(k?.inputSchema ? { inputSchema: capSchema(k.inputSchema) } : {}),
   }));
 }
-/** The agent's address as shown publicly: no user:password@, no ?query or #fragment (owners
- *  sometimes put a key there). An official agent's "url" is its id and is shown as is. */
-function publicUrl(raw) {
-  try {
-    const u = new URL(raw);
-    u.username = "";
-    u.password = "";
-    u.search = "";
-    u.hash = "";
-    return u.href;
-  } catch {
-    return String(raw || "").split(/[?#]/)[0];
-  }
-}
-
 const NAVIGATE_PER_MIN = 6;
 const CATALOGUE_MS = 60_000;
 const HANDED_OVER = "the Mind changed hands: connect your own agent";
+const PAGE = 50; // the contract's cap on one open_jobs page
+const MAX_PAGES = 40; // open_jobs pages read per tick at most (the contract keeps ≤ 1000 open jobs)
+// A Mind too hungry (or asleep) to pay the thought deliver_job charges is looked at again after
+// this long, without spending an attempt or running her agent (someone may feed her).
+const NOT_READY_MS = 60_000;
+const PARAMS_MS = 60_000;
 
 function makeGateway({ view, account, contractId, workerId, store, plan, readToken }) {
   const busy = new Set();
   const attempts = new Map();
   const done = new Set();
   const lastTest = new Map();
-  const navigations = new Map(); // account -> times of its Navigator calls in the last minute
+  const notReady = new Map(); // job id -> when her Mind was last found unable to pay the thought
+  const running = new Map(); // mind id -> her jobs being worked right now
+  const navigate = makeRateLimiter(NAVIGATE_PER_MIN); // per account
   let lastHealth = 0;
+  let params = { at: -Infinity, cost: 0n };
+  // What an error may say once stored or shown: no key from the agent's URL, no API key.
+  const scrub = (mindId, msg) => scrubUrls(msg, [store.secretOf(mindId)]).slice(0, 200);
 
   const ownerOf = async (mindId) => (await view("get_mind", { id: mindId }))?.owner || null;
   const serves = (mindId) => !!store.conn(mindId);
@@ -131,7 +128,8 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
       // the NFT was sold after this agent was connected: the new owner must connect their own
       needs_reconnect: !!c.handedOver,
       last_seen: c.lastSeen || 0,
-      last_error: c.handedOver ? HANDED_OVER : c.lastError || null,
+      // scrubbed again on the way out: an error stored before the scrubbing existed
+      last_error: c.handedOver ? HANDED_OVER : c.lastError ? scrub(mindId, c.lastError) : null,
       since: c.since,
       gateway: workerId,
     };
@@ -199,9 +197,13 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
     if (!out.text && !out.files.length) throw new Error("the agent returned nothing");
     const saved = saveFiles(out.files, job.buyer, job.mind_id, job.id);
     const digest = sha256(JSON.stringify({ text: out.text, files: saved.map((f) => f.sha256) }));
-    store.setResult(job.id, { text: out.text, files: saved.map(({ id, name, mime, size, sha256: h }) => ({ id, name, mime, size, sha256: h })), sha256: digest, ts: Date.now() });
+    // Kept before delivery (the on-chain record points at it), but shown to nobody until the
+    // job is Delivered on chain: a buyer must not read the work and then take the refund.
+    const stored = { text: out.text, files: saved.map(({ id, name, mime, size, sha256: h }) => ({ id, name, mime, size, sha256: h })), sha256: digest, ts: Date.now() };
+    store.setResult(job.id, stored);
     const result = onchainResult(out.text, saved, job.id, digest);
     await account.functionCall({ contractId, methodName: "deliver_job", args: { job_id: job.id, result }, gas: GAS, attachedDeposit: "0" });
+    store.setResult(job.id, { ...stored, delivered: true });
     store.setJob(job.id, null);
     done.add(job.id);
     console.log(`gateway job ${job.id} mind ${job.mind_id} delivered by ${conn.name}: ${result.slice(0, 70)}`);
@@ -218,31 +220,84 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
         // the same bounds as onConnect: a card that grew can't bloat the store or the prompts
         store.patchConn(id, { online: true, lastSeen: Date.now(), lastError: null, skills: trimSkills(d.skills), card: d.card, name: str(d.name, 60) || c.name, ...(d.description ? { description: str(d.description, 500) } : {}) });
       } catch (e) {
-        store.patchConn(id, { online: false, lastError: e.message.slice(0, 200) });
+        store.patchConn(id, { online: false, lastError: scrub(id, e.message) });
       }
     }
+  }
+
+  async function thoughtCost() {
+    if (Date.now() - params.at > PARAMS_MS) params = { at: Date.now(), cost: BigInt((await view("params", {}))?.thought_cost ?? 0) };
+    return params.cost;
+  }
+  /** Can she pay the thought deliver_job charges her (awake, live food >= thought cost)? Checked
+   *  before her agent runs: a delivery the contract refuses would waste the agent's work (and,
+   *  before the result was gated, leak it). Same rule as jobs.js canThink. */
+  async function canThink(mindId, ahead = 0) {
+    const state = await view("live_state", { id: mindId });
+    if (!state || state === "asleep" || state === "ghost") return false;
+    const bal = BigInt((await view("live_balance", { id: mindId })) ?? 0);
+    return bal >= (await thoughtCost()) * BigInt(ahead + 1);
+  }
+
+  /** Every open job this gateway may deliver. open_jobs skips `from_index` among ALL open jobs
+   *  and then filters by agent, so it is walked in steps of PAGE (an empty page means nothing
+   *  matches past it), up to open_job_count, with repeats dropped (like jobs.js colonyJobs). */
+  async function myOpenJobs() {
+    const raw = await view("open_job_count", {}).catch(() => null);
+    const count = raw === null || raw === undefined ? null : Number(raw);
+    const seen = new Map();
+    for (let from = 0, n = 0; n < MAX_PAGES; from += PAGE, n++) {
+      const page = (await view("open_jobs", { agent: workerId, from_index: from, limit: PAGE })) || [];
+      for (const job of page) seen.set(job.id, job);
+      if (!page.length || (Number.isFinite(count) && from + PAGE >= count)) break;
+    }
+    return [...seen.values()];
   }
 
   async function tick() {
     if (!store.mindIds().length) return;
     if (Date.now() - lastHealth > HEALTH_EVERY_MS) health().catch(() => {});
     const nowMs = Date.now();
-    const open = await view("open_jobs", { agent: workerId });
+    const open = await myOpenJobs();
     for (const job of open) {
       if (!store.conn(job.mind_id)) continue;
       if (busy.has(job.id) || done.has(job.id) || (attempts.get(job.id) || 0) >= MAX_ATTEMPTS) continue;
       if (store.job(job.id)?.state === "asking") continue; // waiting for the buyer
       if (Number(BigInt(job.deadline) / 1_000_000n) < nowMs) continue;
+      if (nowMs - (notReady.get(job.id) ?? -Infinity) < NOT_READY_MS) continue; // she couldn't pay a minute ago
       busy.add(job.id);
-      work(job)
+      // her other jobs being worked right now will each take a thought too
+      const ahead = running.get(job.mind_id) || 0;
+      running.set(job.mind_id, ahead + 1);
+      (async () => {
+        let ready;
+        try {
+          ready = await canThink(job.mind_id, ahead);
+        } catch (e) {
+          console.error(`gateway job ${job.id}: could not read her state:`, e.message);
+          ready = false;
+        }
+        if (!ready) {
+          notReady.set(job.id, Date.now()); // not an attempt: nothing was spent
+          return;
+        }
+        notReady.delete(job.id);
+        await work(job);
+      })()
         .catch((e) => {
           const n = (attempts.get(job.id) || 0) + 1;
           attempts.set(job.id, n);
-          store.patchConn(job.mind_id, { lastError: e.message.slice(0, 200), ...(n >= MAX_ATTEMPTS ? { online: false } : {}) });
-          console.error(`gateway job ${job.id} attempt ${n}/${MAX_ATTEMPTS}:`, e.message);
+          store.patchConn(job.mind_id, { lastError: scrub(job.mind_id, e.message), ...(n >= MAX_ATTEMPTS ? { online: false } : {}) });
+          console.error(`gateway job ${job.id} attempt ${n}/${MAX_ATTEMPTS}:`, scrub(job.mind_id, e.message));
         })
-        .finally(() => busy.delete(job.id));
+        .finally(() => {
+          busy.delete(job.id);
+          const n = (running.get(job.mind_id) || 1) - 1;
+          if (n > 0) running.set(job.mind_id, n);
+          else running.delete(job.mind_id);
+        });
     }
+    for (const id of notReady.keys()) if (!open.some((j) => j.id === id)) notReady.delete(id);
   }
 
   // ── chat ──
@@ -251,8 +306,14 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
     if (!conn) throw new Error("no agent connected");
     if (await checkHands(mindId)) throw new Error(HANDED_OVER);
     const c = store.chat(mindId, who);
-    const out = await run(conn, store.secretOf(mindId), { text: prompt, contextId: c.contextId, taskId: c.taskId, history: c.history || [], mindId, buyer: who, chat: true, timeoutMs: 150_000 }, plan);
-    if (out.state === "failed") throw new Error(out.text || "the agent failed");
+    let out;
+    try {
+      out = await run(conn, store.secretOf(mindId), { text: prompt, contextId: c.contextId, taskId: c.taskId, history: c.history || [], mindId, buyer: who, chat: true, timeoutMs: 150_000 }, plan);
+    } catch (e) {
+      // the chat server shows this to whoever wrote (often a guest): never the owner's key
+      throw new Error(scrub(mindId, e?.message || e));
+    }
+    if (out.state === "failed") throw new Error(scrub(mindId, out.text || "the agent failed"));
     store.patchConn(mindId, { online: true, lastSeen: Date.now(), lastError: null });
     const saved = saveFiles(out.files, who, mindId, null);
     const reply = [out.text, ...saved.map(fileLine)].filter(Boolean).join("\n\n") || "(no answer)";
@@ -360,11 +421,11 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
     try {
       const out = await run(c, store.secretOf(mindId), { text: str(b.text, 2000) || "Hello! What can you do?", skill: str(b.skill, 100) || null, mindId, buyer: who, history: [], timeoutMs: 120_000 }, plan);
       const saved = saveFiles(out.files, who, mindId, null);
-      store.patchConn(mindId, { online: out.state !== "failed", lastSeen: Date.now(), lastError: out.state === "failed" ? out.text.slice(0, 200) : null });
+      store.patchConn(mindId, { online: out.state !== "failed", lastSeen: Date.now(), lastError: out.state === "failed" ? scrub(mindId, out.text) : null });
       return [200, { state: out.state, text: out.text, files: saved.map(({ id, name, mime, size }) => ({ id, name, mime, size })) }];
     } catch (e) {
-      store.patchConn(mindId, { online: false, lastError: e.message.slice(0, 200) });
-      return [502, { error: e.message }];
+      store.patchConn(mindId, { online: false, lastError: scrub(mindId, e.message) });
+      return [502, { error: scrubUrls(e.message, [store.secretOf(mindId)]) }];
     }
   }
 
@@ -410,12 +471,7 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
     if (!who) return [401, { error: "sign in again" }];
     const text = str(b.text, 500);
     if (!text) return [400, { error: "say what you need" }];
-    const t = Date.now();
-    const recent = (navigations.get(who) || []).filter((x) => x > t - 60_000);
-    if (recent.length >= NAVIGATE_PER_MIN) return [429, { error: "a few searches a minute: try again shortly" }];
-    recent.push(t);
-    navigations.set(who, recent);
-    if (navigations.size > 5000) for (const [k, v] of navigations) if (!v.some((x) => x > t - 60_000)) navigations.delete(k);
+    if (!navigate(who)) return [429, { error: "a few searches a minute: try again shortly" }];
     const all = await catalogue();
     if (!all.length) return [200, { suggestions: [], note: "No live services yet." }];
     const w = words(text);
@@ -474,7 +530,9 @@ Answer with only JSON: {"picks":[{"id":<service id>,"input":<an object with the 
     if (!job) return [404, { error: "no such job" }];
     if (!(await canSeeJob(who, job))) return [403, { error: "only the buyer and her owner see this job" }];
     const st = store.job(jobId);
-    return [200, { job_id: jobId, waiting: st?.state === "asking", question: st?.state === "asking" ? st.question : null, answered: st?.state === "answered", result: store.result(jobId) }];
+    // the full result only once the job is Delivered on chain (paid for); the agent's question
+    // is shown while it waits for the buyer
+    return [200, { job_id: jobId, status: job.status, waiting: st?.state === "asking", question: st?.state === "asking" ? st.question : null, answered: st?.state === "answered", result: resultOf(jobId, job.status) }];
   }
 
   async function onAnswer(b) {
@@ -562,7 +620,19 @@ Answer with only JSON: {"picks":[{"id":<service id>,"input":<an object with the 
 
   // For the x402 door (worker/x402.js): the full result, the agent's open question, and the
   // buyer's answer to it, for a job whose task id the buyer holds.
-  const resultOf = (jobId) => store.result(jobId);
+  // `status`: the job's on-chain status. The stored result is revealed only for a Delivered job
+  // (or, once the record is gone after close_job, one this gateway saw delivered); a stored
+  // result of a job still Open or Refunded stays hidden, or the buyer could read it and refund.
+  function resultOf(jobId, status) {
+    const r = store.result(jobId);
+    if (!r) return null;
+    if (status === "Delivered") {
+      if (!r.delivered) store.setResult(jobId, { ...r, delivered: true });
+      return r;
+    }
+    if (status === undefined || status === null) return r.delivered ? r : null;
+    return null;
+  }
   const questionOf = (jobId) => (store.job(jobId)?.state === "asking" ? store.job(jobId).question : null);
   async function answerJob(jobId, text) {
     const job = await view("get_job", { job_id: jobId }).catch(() => null);

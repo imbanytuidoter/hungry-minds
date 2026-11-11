@@ -46,3 +46,10 @@ test("thinking is stripped from the reply", () => {
   assert.equal(stripThinking("<think>let me see…</think>\nHello there"), "Hello there");
   assert.equal(stripThinking("plain"), "plain");
 });
+
+test("R2 F1: an unclosed <think> is no answer (empty), never the reasoning itself", () => {
+  assert.equal(stripThinking("<think>the user wants a greeting, I should"), "");
+  assert.equal(stripThinking("Hi! <think>more thinking that never ends"), "");
+  assert.equal(stripThinking("<think>a</think> Hello <THINK>b"), "");
+  assert.equal(stripThinking("<think>a</think> Hello"), "Hello");
+});

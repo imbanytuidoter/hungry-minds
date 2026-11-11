@@ -261,6 +261,8 @@ function x402Rig(schema) {
       input_schemas: [schema],
       jobs_of: [],
       get_job: null,
+      open_count_of: 0,
+      open_job_count: 0,
     })[m];
   const provider = {
     query: async () => ({ permission: "FullAccess", nonce: 4 }),

@@ -350,6 +350,7 @@ impl Contract {
     pub fn list_for_sale(&mut self, id: u64, price: U128) {
         self.assert_owner(id);
         require!(price.0 > 0, "price must be positive");
+        require!(!self.minds.get(&id).is_some_and(|m| m.ghost), "a ghost can't be sold");
         self.colony.sales.insert(id, price.0);
     }
 
@@ -394,7 +395,10 @@ impl Contract {
         let buyer = env::predecessor_account_id();
         let paid = env::attached_deposit().as_yoctonear();
         require!(paid >= price, "attach at least the sale price");
-        let seller = self.minds.get(&id).unwrap_or_else(|| env::panic_str("no such Mind")).owner.clone();
+        let mind = self.minds.get(&id).unwrap_or_else(|| env::panic_str("no such Mind"));
+        // reaped after it was listed: a buyer never pays for a memorial
+        require!(!mind.ghost, "she became a ghost: this Mind can't be bought");
+        let seller = mind.owner.clone();
         require!(buyer != seller, "you already own this Mind");
         let (old_owner, cleared) = self.hand_over(id, &seller, &buyer, None, &Some("sale".into()));
         self.unplug_on_sale(id);
@@ -563,6 +567,19 @@ mod tests {
         c.set_service_live(0, false);
         as_who("bob.near", NEAR / 25);
         let _ = c.order_service(0, "hi".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "can't be bought")]
+    fn a_ghost_reaped_after_listing_cant_be_bought() {
+        let mut c = hatched_by_alice();
+        as_who("alice.near", 0);
+        c.list_for_sale(0, U128(3 * NEAR));
+        let m = c.minds.get_mut(&0).unwrap();
+        m.asleep_since = 1;
+        m.ghost = true; // reaped (reap also clears the listing; this checks buy_mind's own guard)
+        as_who("bob.near", 3 * NEAR);
+        c.buy_mind(0, Some(U128(3 * NEAR)));
     }
 
     #[test]

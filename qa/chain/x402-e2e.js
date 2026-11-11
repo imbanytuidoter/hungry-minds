@@ -89,7 +89,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // the same delegate in a reworded header (other spacing) is still the same payment
   const reworded = Buffer.from(JSON.stringify(JSON.parse(Buffer.from(header, "base64").toString()), null, 1)).toString("base64");
   const replay = await post(URL_W, send(text + " again"), { "X-PAYMENT": reworded });
-  ok(first.status === 200 && replay.status === 402 && /already used/.test(replay.data.error || ""), "the same payment can't be used twice", `${first.status} ${first.data.error?.message || first.data.error || ""} / ${replay.data.error}`);
+  const replayErr = replay.data.error?.message || replay.data.error || "";
+  ok(first.status === 200 && replay.status === 409 && /already relayed/.test(replayErr), "the same payment can't be sent twice", `${first.status} / ${replay.status} ${replayErr}`);
 
   // tidy: close the finished jobs so the 0.03 NEAR deposits come back (the second may still be open)
   for (const id of [jobId, first.data.result?.task?.metadata?.job_id].filter((x) => x != null)) {

@@ -6,7 +6,21 @@ export default function Logo({ size = 44, word = true, wordSize = 24, className 
       {/* eslint-disable-next-line @next/next/no-img-element -- a vector badge, nothing for next/image to optimise */}
       <img className="hm-logo-img" src="/kit/brand/logo.svg" alt={word ? "" : "Hungry Minds"} width={size} height={size} style={{ flex: "none", display: "block", borderRadius: "50%", filter: "drop-shadow(0 2px 6px rgba(46,28,42,.2))" }} />
       {word && (
-        <span className="hm-logo-word" style={{ fontFamily: "var(--font-figtree), var(--font-sans), system-ui, sans-serif", fontWeight: 700, fontSize: wordSize, letterSpacing: "-.02em", lineHeight: 1, color: "#2E1C2A" }}>
+        <span
+          className="hm-logo-word"
+          style={{
+            fontFamily: "var(--font-fraunces), var(--font-dm-serif), Georgia, serif",
+            fontOpticalSizing: "auto",
+            fontWeight: 560,
+            fontSize: wordSize,
+            letterSpacing: "-.015em",
+            lineHeight: 1,
+            // warm, soft cut of Fraunces, matching the landing wordmark
+            fontVariationSettings: '"SOFT" 60, "WONK" 1, "opsz" 36',
+            // follows the theme's ink, so it stays readable and on-brand on every scene
+            color: "var(--ink, #2E1C2A)",
+          }}
+        >
           hungry minds
         </span>
       )}

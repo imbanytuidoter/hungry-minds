@@ -431,6 +431,8 @@ impl Contract {
         let mut inflight = pending_per_mind();
         let n = inflight.get(&mind_id).copied().unwrap_or(0);
         require!(n < MAX_PENDING_PER_MIND, "she is still thinking about her last messages: wait for a reply");
+        // guests may hold all but one slot, so strangers can never block her owner's own thoughts
+        require!(by_owner || n + 1 < MAX_PENDING_PER_MIND, "she is busy with other guests right now: try again in a minute");
         inflight.insert(mind_id, n + 1);
         drop(inflight);
         let rid = self.next_request;
@@ -943,6 +945,7 @@ impl Contract {
         let mut ghosts = ghost_count();
         ghosts.insert(0, ghosts.get(&0).copied().unwrap_or(0) + 1);
         drop(ghosts);
+        self.clear_listing(id); // a ghost is not for sale
         let mind = self.minds.get_mut(&id).unwrap();
         mind.ghost = true;
         // Credit the hatch reserve to the owner as a *claimable* amount (pull pattern):
@@ -1220,7 +1223,7 @@ impl Contract {
         let sender = env::predecessor_account_id();
         // the seller's own agent, unplugged by nft_resolve_transfer if the transfer stands (and
         // only that one: the receiver may plug in its own agent meanwhile)
-        let seller_agent = agents::agent_account(id);
+        let seller_agent = agents::agent_info(id);
         let (old_owner, cleared) = self.hand_over(id, &sender, &receiver_id, approval_id, &memo);
 
         ext_nft_receiver::ext(receiver_id.clone())
@@ -1243,7 +1246,7 @@ impl Contract {
         receiver_id: AccountId,
         token_id: String,
         cleared_approvals: BTreeMap<AccountId, u64>,
-        seller_agent: Option<AccountId>,
+        seller_agent: Option<agents::AgentInfo>,
     ) -> bool {
         // A bool is a few bytes; cap the read. Ok -> parse the receiver's answer,
         // Err (failed or oversized) -> treat as "return the token".
@@ -1255,7 +1258,7 @@ impl Contract {
             // The transfer stands: the old approvals are gone for good, so refund the storage
             // the previous owner staked for them, and the seller's own agent is unplugged.
             if let Ok(id) = token_id.parse::<u64>() {
-                if seller_agent.is_some() && agents::agent_account(id) == seller_agent {
+                if seller_agent.is_some() && agents::agent_account(id) == seller_agent.as_ref().map(|a| a.account.clone()) {
                     self.unplug_on_sale(id);
                 }
             }
@@ -1271,6 +1274,14 @@ impl Contract {
                     // approvals the receiver added while it held her go back with their storage
                     let receivers = std::mem::replace(&mut mind.approvals, cleared_approvals);
                     refund_cleared_approvals(&receivers, &receiver_id);
+                    // anything the receiver set while it held her goes too: a listing (else it could
+                    // sell her back to itself for nothing) and an agent it plugged in
+                    self.colony.sales.remove(&id);
+                    // put her agent back exactly as it was before the transfer (the receiver may
+                    // have swapped it while it held her), so a bounce is a true no-op
+                    if agents::agent_account(id) != seller_agent.as_ref().map(|a| a.account.clone()) {
+                        agents::restore_agent(id, seller_agent.clone());
+                    }
                     let tid = id.to_string();
                     near_contract_standards::non_fungible_token::events::NftTransfer {
                         old_owner_id: receiver_id.as_ref(),
@@ -1737,6 +1748,32 @@ mod tests {
         c.hatch_mind("Rue".to_string(), None);
         testing_env!(ctx_from("bob.near", NearToken::from_yoctonear(0)).build());
         let _ = c.chat(0, "hi".to_string());
+    }
+
+    // --- guests can't take her owner's last thought slot ---
+    #[test]
+    fn guests_leave_her_owner_one_thought_slot() {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(1)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string(), None);
+        for _ in 0..(MAX_PENDING_PER_MIND - 1) {
+            testing_env!(ctx_from("bob.near", NearToken::from_millinear(10)).build());
+            let _ = c.chat(0, "hi".to_string());
+        }
+        testing_env!(ctx_from("alice.near", NearToken::from_yoctonear(0)).build());
+        let _ = c.think(0, "still mine".to_string()); // her owner still gets in
+    }
+
+    #[test]
+    #[should_panic(expected = "busy with other guests")]
+    fn a_fifth_guest_thought_is_refused() {
+        testing_env!(ctx_from("alice.near", NearToken::from_near(1)).build());
+        let mut c = Contract::default();
+        c.hatch_mind("Rue".to_string(), None);
+        for _ in 0..MAX_PENDING_PER_MIND {
+            testing_env!(ctx_from("bob.near", NearToken::from_millinear(10)).build());
+            let _ = c.chat(0, "hi".to_string());
+        }
     }
 
     // --- thoughts in flight ---

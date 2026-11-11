@@ -424,7 +424,14 @@ export function load(now: number): World {
     const raw = localStorage.getItem(SAVE_KEY);
     if (raw) {
       const w = JSON.parse(raw) as World;
-      if (w.v === 3) return w;
+      if (w.v === 3) {
+        // services saved before their category changed take today's category from the seed list
+        for (const s of w.services) {
+          const seed = SERVICES.find((x) => x.title === s.title);
+          if (seed) s.cat = seed.cat;
+        }
+        return w;
+      }
     }
   } catch {
     /* private mode / corrupted save — start fresh */

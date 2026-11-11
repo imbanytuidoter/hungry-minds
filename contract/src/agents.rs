@@ -6,7 +6,7 @@
 //! - **Jobs**: ordering a service locks its price in escrow with a deadline taken from the
 //!   service's terms (SLA). The agent delivers a result before the deadline and the escrow is
 //!   released 90% to the Mind's owner and 10% to the protocol; past the deadline the buyer takes it back
-//!   (`refund_job`). The thought the work costs her is paid to whoever delivered it.
+//!   (`refund_job`). The thought the work costs her is paid to the approved worker or gateway that delivered it, otherwise to the treasury.
 //! - **Storage**: each job also holds `JOB_DEPOSIT` for its own storage, returned to the
 //!   buyer when they close it (`close_job`).
 //! - **Reputation**: delivered / refunded counts, time to deliver, earnings and the buyers'
@@ -65,9 +65,28 @@ trait WNear {
 fn agents() -> LookupMap<u64, AgentInfo> {
     LookupMap::new(b"a".to_vec())
 }
+/// Most open jobs one buyer may hold on one Mind (so one account can't take all her slots).
+pub const MAX_OPEN_PER_BUYER_MIND: usize = 5;
 /// The account of the Mind's agent, if one is plugged in.
 pub(crate) fn agent_account(mind_id: u64) -> Option<AccountId> {
     agents().get(&mind_id).map(|i| i.account.clone())
+}
+/// The Mind's whole agent record, to snapshot and later restore (a bounced transfer).
+pub(crate) fn agent_info(mind_id: u64) -> Option<AgentInfo> {
+    agents().get(&mind_id).cloned()
+}
+/// Put the Mind's agent back to a snapshot (used to undo a receiver's change on a bounce).
+pub(crate) fn restore_agent(mind_id: u64, info: Option<AgentInfo>) {
+    let mut a = agents();
+    match info {
+        Some(i) => {
+            a.insert(mind_id, i);
+        }
+        None => {
+            a.remove(&mind_id);
+        }
+    }
+    env::log_str(&format!("agent_restored mind={mind_id} reason=transfer_reverted"));
 }
 /// On a change of owner: drop the Mind's agent unless `platform` says it runs on the platform.
 pub(crate) fn unplug_personal_agent(mind_id: u64, platform: impl Fn(&AccountId) -> bool) {
@@ -248,9 +267,8 @@ impl Contract {
         jobs().get(&id).cloned().unwrap_or_else(|| env::panic_str("no such job"))
     }
 
-    /// Pay the thought a job cost her to whoever delivered it: the Mind's own agent earns it
-    /// like a worker does (unless the keeper delivers as themselves — then it goes to the
-    /// treasury, so a keeper never turns her food into their own money).
+    /// Pay the thought a job cost her: an approved responder (worker, gateway) earns it;
+    /// any other deliverer's thought goes to the treasury.
     fn pay_deliverer(&mut self, mind_id: u64, cost: u128, deliverer: &AccountId, _is_agent: bool) {
         // Only the platform's approved responders (the worker, the agent gateway) earn the thought
         // from her food; any other deliverer's thought goes to the treasury. Otherwise a keeper
@@ -296,6 +314,11 @@ impl Contract {
         }
         if agents().get(&s.mind_id).is_some_and(|a| &a.account == buyer) {
             return Err("her own agent can't order her services".into());
+        }
+        let all = jobs();
+        let mine_here = buyer_jobs().get(buyer).map_or(0, |l| l.iter().filter(|i| all.get(i).is_some_and(|j| j.mind_id == s.mind_id && j.status == JobStatus::Open)).count());
+        if mine_here >= MAX_OPEN_PER_BUYER_MIND {
+            return Err(format!("you already have {MAX_OPEN_PER_BUYER_MIND} open jobs with her: wait for one to finish"));
         }
         if open_per_mind().get(&s.mind_id).copied().unwrap_or(0) >= MAX_OPEN_PER_MIND {
             return Err(format!("she has {MAX_OPEN_PER_MIND} jobs waiting: try again when one is delivered"));
@@ -694,6 +717,11 @@ impl Contract {
     pub fn open_job_count(&self) -> u64 {
         open_ids().len() as u64
     }
+
+    /// Open jobs waiting on one Mind (at most MAX_OPEN_PER_MIND take new orders).
+    pub fn open_count_of(&self, mind_id: u64) -> u32 {
+        open_per_mind().get(&mind_id).copied().unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
@@ -728,20 +756,23 @@ mod tests {
     }
     fn shop3() -> Contract {
         let mut c = shop();
-        for name in ["Ivy", "Oak"] {
+        for i in 1..10 {
             at("alice.near", 1000 * MILLI, T0);
-            c.hatch_mind(name.into(), None);
+            c.hatch_mind(format!("M{i}"), None);
         }
-        for mind in [1u64, 2] {
+        for mind in 1u64..10 {
             at("alice.near", 100 * MILLI, T0);
             c.publish_service(mind, "Wallet check".into(), "Reads a NEAR account".into(), 8, U128(30 * MILLI), "check".into());
         }
         c
     }
-    /// bob orders service `sid` (services 0, 1, 2 belong to Minds 0, 1, 2 in shop3)
+    /// bob orders service `sid` (services 0..10 belong to Minds 0..10 in shop3)
     fn order_on(c: &mut Contract, sid: u64, ts: u64) -> u64 {
-        at("bob.near", 30 * MILLI + JOB_DEPOSIT, ts);
-        c.order_job(sid, "check bob.near".into())
+        order_as(c, "bob.near", sid, ts)
+    }
+    fn order_as(c: &mut Contract, who: &str, sid: u64, ts: u64) -> u64 {
+        at(who, 30 * MILLI + JOB_DEPOSIT, ts);
+        c.order_job(sid, "check".into())
     }
     fn order(c: &mut Contract, ts: u64) -> u64 {
         at("bob.near", 30 * MILLI + JOB_DEPOSIT, ts);
@@ -844,7 +875,7 @@ mod tests {
         let mut c = shop3();
         let first = order_on(&mut c, 0, T0);
         for i in 1..MAX_BUYER_JOBS {
-            order_on(&mut c, (i % 3) as u64, T0);
+            order_on(&mut c, (i % 10) as u64, T0);
         }
         assert_eq!(c.jobs_of("bob.near".parse().unwrap()).len(), MAX_BUYER_JOBS);
         // the oldest job (and its 0.03 NEAR deposit) is still on the list (a 51st order is
@@ -865,16 +896,31 @@ mod tests {
     fn the_fifty_first_open_order_is_refused() {
         let mut c = shop3();
         for i in 0..MAX_BUYER_JOBS {
-            order_on(&mut c, (i % 3) as u64, T0);
+            order_on(&mut c, (i % 10) as u64, T0);
         }
-        order_on(&mut c, 0, T0);
+        // an 11th Mind where bob has no job yet: only the overall cap of 50 refuses
+        at("alice.near", 1000 * MILLI, T0);
+        c.hatch_mind("M10".into(), None);
+        at("alice.near", 100 * MILLI, T0);
+        c.publish_service(10, "Wallet check".into(), "Reads a NEAR account".into(), 8, U128(30 * MILLI), "check".into());
+        order_on(&mut c, 10, T0);
     }
 
     #[test]
     #[should_panic(expected = "jobs waiting")]
     fn one_mind_takes_at_most_twenty_open_jobs() {
         let mut c = shop();
-        for _ in 0..MAX_OPEN_PER_MIND {
+        for i in 0..MAX_OPEN_PER_MIND {
+            order_as(&mut c, ["b1.near", "b2.near", "b3.near", "b4.near"][(i / 5) as usize], 0, T0);
+        }
+        order_as(&mut c, "b5.near", 0, T0);
+    }
+
+    #[test]
+    #[should_panic(expected = "open jobs with her")]
+    fn one_buyer_holds_at_most_five_open_jobs_on_one_mind() {
+        let mut c = shop();
+        for _ in 0..MAX_OPEN_PER_BUYER_MIND {
             order(&mut c, T0);
         }
         order(&mut c, T0);
@@ -883,13 +929,15 @@ mod tests {
     #[test]
     fn a_delivered_job_frees_a_place_in_her_queue() {
         let mut c = shop();
-        let first = order(&mut c, T0);
-        for _ in 1..MAX_OPEN_PER_MIND {
-            order(&mut c, T0);
+        let first = order_as(&mut c, "b1.near", 0, T0);
+        for i in 1..MAX_OPEN_PER_MIND {
+            order_as(&mut c, ["b1.near", "b2.near", "b3.near", "b4.near"][(i / 5) as usize], 0, T0);
         }
+        assert_eq!(c.open_count_of(0), MAX_OPEN_PER_MIND);
         at("worker.near", 0, T0 + SEC);
         c.deliver_job(first, "done".into());
-        order(&mut c, T0 + 2 * SEC); // room again
+        assert_eq!(c.open_count_of(0), MAX_OPEN_PER_MIND - 1);
+        order_as(&mut c, "b5.near", 0, T0 + 2 * SEC); // room again
     }
 
     #[test]
@@ -972,11 +1020,12 @@ mod tests {
         let mut c = shop();
         at("alice.near", 10 * MILLI, T0);
         c.set_agent(0, Some("bot.alice.near".parse().unwrap()), None);
+        let snap = agent_info(0);
         at("alice.near", 1, T0);
         let _ = c.nft_transfer_call("market.near".parse().unwrap(), "0".into(), None, None, "".into());
         at("market.near", 10 * MILLI, T0); // the new owner plugs in its own agent before the resolve
         c.set_agent(0, Some("bot.market.near".parse().unwrap()), None);
-        assert!(resolve(&mut c, false));
+        assert!(resolve(&mut c, false, snap));
         assert_eq!(c.agent_of(0).unwrap().account.as_str(), "bot.market.near");
     }
 
@@ -1097,7 +1146,7 @@ mod tests {
     }
 
     /// The callback after nft_on_transfer, with the receiver's answer (`true` = return it).
-    fn resolve(c: &mut Contract, returned: bool) -> bool {
+    fn resolve(c: &mut Contract, returned: bool, seller_agent: Option<AgentInfo>) -> bool {
         testing_env!(
             VMContextBuilder::new().predecessor_account_id("hm.near".parse().unwrap()).current_account_id("hm.near".parse().unwrap()).block_timestamp(T0).build(),
             near_sdk::test_vm_config(),
@@ -1105,7 +1154,52 @@ mod tests {
             Default::default(),
             vec![near_sdk::PromiseResult::Successful(if returned { b"true".to_vec() } else { b"false".to_vec() })]
         );
-        c.nft_resolve_transfer("alice.near".parse().unwrap(), "market.near".parse().unwrap(), "0".into(), Default::default(), Some("bot.alice.near".parse().unwrap()))
+        c.nft_resolve_transfer("alice.near".parse().unwrap(), "market.near".parse().unwrap(), "0".into(), Default::default(), seller_agent)
+    }
+
+    #[test]
+    fn a_bounced_transfer_call_clears_what_the_receiver_set() {
+        let mut c = shop();
+        at("alice.near", 1, T0);
+        let _ = c.nft_transfer_call("market.near".parse().unwrap(), "0".into(), None, None, "".into());
+        // while it holds her, the receiver lists her for 1 yocto and plugs in its own agent
+        at("market.near", 0, T0);
+        c.list_for_sale(0, U128(1));
+        at("market.near", 10 * MILLI, T0);
+        c.set_agent(0, Some("bot.market.near".parse().unwrap()), None);
+        testing_env!(
+            VMContextBuilder::new().predecessor_account_id("hm.near".parse().unwrap()).current_account_id("hm.near".parse().unwrap()).block_timestamp(T0).build(),
+            near_sdk::test_vm_config(),
+            near_sdk::RuntimeFeesConfig::test(),
+            Default::default(),
+            vec![near_sdk::PromiseResult::Successful(b"true".to_vec())]
+        );
+        assert!(!c.nft_resolve_transfer("alice.near".parse().unwrap(), "market.near".parse().unwrap(), "0".into(), Default::default(), None));
+        assert_eq!(c.get_mind(0).unwrap().owner.as_str(), "alice.near");
+        assert!(c.sale_price(0).is_none(), "the receiver's listing is gone");
+        assert!(c.agent_of(0).is_none(), "the receiver's agent is gone");
+    }
+
+    #[test]
+    fn a_bounced_transfer_call_restores_the_sellers_agent_even_if_the_receiver_swapped_it() {
+        let mut c = shop();
+        at("alice.near", 10 * MILLI, T0);
+        c.set_agent(0, Some("bot.alice.near".parse().unwrap()), None);
+        at("alice.near", 1, T0);
+        let snapshot = agent_info(0); // nft_transfer_call captures this before handing her over
+        let _ = c.nft_transfer_call("market.near".parse().unwrap(), "0".into(), None, None, "".into());
+        at("market.near", 10 * MILLI, T0);
+        c.set_agent(0, Some("bot.market.near".parse().unwrap()), None); // the receiver swaps it
+        testing_env!(
+            VMContextBuilder::new().predecessor_account_id("hm.near".parse().unwrap()).current_account_id("hm.near".parse().unwrap()).block_timestamp(T0).build(),
+            near_sdk::test_vm_config(),
+            near_sdk::RuntimeFeesConfig::test(),
+            Default::default(),
+            vec![near_sdk::PromiseResult::Successful(b"true".to_vec())]
+        );
+        assert!(!c.nft_resolve_transfer("alice.near".parse().unwrap(), "market.near".parse().unwrap(), "0".into(), Default::default(), snapshot));
+        // a true no-op: her own agent is back, not the receiver's and not empty
+        assert_eq!(c.agent_of(0).unwrap().account.as_str(), "bot.alice.near");
     }
 
     #[test]
@@ -1113,10 +1207,11 @@ mod tests {
         let mut c = shop();
         at("alice.near", 10 * MILLI, T0);
         c.set_agent(0, Some("bot.alice.near".parse().unwrap()), None);
+        let snap = agent_info(0);
         at("alice.near", 1, T0);
         let _ = c.nft_transfer_call("market.near".parse().unwrap(), "0".into(), None, None, "".into());
         assert!(c.agent_of(0).is_some(), "not unplugged before the receiver answers");
-        assert!(!resolve(&mut c, true)); // the market returns her
+        assert!(!resolve(&mut c, true, snap)); // the market returns her
         assert_eq!(c.get_mind(0).unwrap().owner.as_str(), "alice.near");
         assert!(c.agent_of(0).is_some(), "a bounced transfer is a no-op: her agent stays");
     }
@@ -1126,9 +1221,10 @@ mod tests {
         let mut c = shop();
         at("alice.near", 10 * MILLI, T0);
         c.set_agent(0, Some("bot.alice.near".parse().unwrap()), None);
+        let snap = agent_info(0);
         at("alice.near", 1, T0);
         let _ = c.nft_transfer_call("market.near".parse().unwrap(), "0".into(), None, None, "".into());
-        assert!(resolve(&mut c, false)); // the market keeps her
+        assert!(resolve(&mut c, false, snap)); // the market keeps her
         assert_eq!(c.get_mind(0).unwrap().owner.as_str(), "market.near");
         assert!(c.agent_of(0).is_none());
     }

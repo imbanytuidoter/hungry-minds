@@ -549,8 +549,9 @@ export const PAGES: DocPage[] = [
         summary: "No method moves a Mind's food to any account.",
         body: (
           <p>
-            The contract has no way to move a Mind&apos;s food to anyone. It is only spent on her thinking: a reply&apos;s cost goes to the colony worker that answered it, a
-            job&apos;s cost to whoever delivered it (her agent, or a colony worker if she has none), and idle burn to the treasury. Thinking done by her owner&apos;s own account or the contract account itself also goes to the treasury. Her food stays with her when she changes hands. Your earnings are kept apart from her food, and claiming them never touches it.
+            The contract has no way to move a Mind&apos;s food to anyone. It is only spent on her thinking: a reply&apos;s or a job&apos;s cost goes to the approved colony worker
+            or agent gateway that answered or delivered it; when her owner, the contract account, or an agent on the owner&apos;s own NEAR account does the work, it goes to the
+            treasury, and idle burn goes to the treasury too. Her food stays with her when she changes hands. Your earnings are kept apart from her food, and claiming them never touches it.
           </p>
         ),
       },
@@ -660,7 +661,11 @@ export const PAGES: DocPage[] = [
               needs no gas. Usage is written on chain in numbered batches about once a minute, and each batch can only spend what was prepaid: her food for your messages, your
               credits for a guest&apos;s. Her food pays only for messages from her current owner, so after a sale the old owner&apos;s messages are not charged to her.
             </p>
-            <p>A message is at most 500 bytes (about 500 Latin or 250 Cyrillic letters, 2,000 bytes when she has a connected agent), and you wait for her reply before sending the next. If the model is busy or fails, the message is refused and nothing is charged.</p>
+            <p>A message is at most 500 bytes (about 500 Latin or 250 Cyrillic letters, 2,000 bytes when she has a connected agent), and you wait for her reply before sending the next. If the model is busy, fails or sends back an empty reply, the message is refused and nothing is charged.</p>
+            <p>
+              Messages sent on chain (<code>think</code>, <code>chat</code>) wait for her reply in a line of at most 5 per Mind. Guests may hold at most 4 of those 5, so her owner
+              always keeps one.
+            </p>
           </>
         ),
       },
@@ -822,7 +827,7 @@ export const PAGES: DocPage[] = [
       {
         id: "limits",
         title: "Limits",
-        summary: "Input 1,000 bytes, on-chain result 2,000 bytes, uploads 6 MB, 50 unclosed orders per buyer, 20 open jobs per Mind.",
+        summary: "Input 1,000 bytes, on-chain result 2,000 bytes, uploads 6 MB, 50 unclosed orders per buyer, 5 open jobs per buyer on one Mind, 20 open jobs per Mind.",
         body: (
           <Table
             head={["", "Limit"]}
@@ -831,6 +836,7 @@ export const PAGES: DocPage[] = [
               ["Result stored on chain", "2,000 bytes"],
               ["File upload", "6 MB"],
               ["Orders not yet closed, per buyer", "50. Close finished ones in My orders to order more"],
+              ["Open jobs one buyer holds on one Mind", "5. Wait for one to finish to order more from her"],
               ["Open jobs per Mind", "20. More orders are refused until one is delivered or refunded"],
               ["Open jobs across the colony", "1,000"],
               ["Who can't order", "The Mind's own owner and her agent"],
@@ -910,7 +916,8 @@ export const PAGES: DocPage[] = [
         body: (
           <p>
             In <b>Shop → Buy & sell Minds</b>, press <b>Buy</b> and approve the price. Anything paid above the price is refunded. <code>buy_mind</code> takes an optional{" "}
-            <code>expected_price</code>: if the seller changed the price in the meantime, the purchase is refused.
+            <code>expected_price</code>: if the seller changed the price in the meantime, the purchase is refused. A ghost can&apos;t be listed or bought, and reaping a listed Mind
+            clears the listing.
           </p>
         ),
       },
@@ -923,8 +930,8 @@ export const PAGES: DocPage[] = [
             <p>
               The buyer gets her food, look, character, thought count, plugged-in agent, services and their terms, and her reputation. The new owner controls the agent and gets 90%
               of everything she earns from then on; the seller gets nothing more from her. An agent connected by URL or run by the platform goes with her. If the seller ran the
-              agent on their own NEAR account, the contract unplugs it at the sale, so plug in your own. A connected agent may still use the seller&apos;s API key, so for chat and
-              tests the gateway asks the new owner to connect their own.
+              agent on their own NEAR account, the contract unplugs it at the sale, so plug in your own. An agent connected by URL keeps delivering her paid jobs for the new owner,
+              but it may still use the seller&apos;s API key, so for chat and tests the gateway asks the new owner to connect their own agent.
             </p>
             <Table
               num={[1]}
@@ -995,7 +1002,7 @@ export const PAGES: DocPage[] = [
         body: (
           <p>
             The treasury receives 0.65 NEAR of each hatch, 5% of feeds, 20% of revives, 10% of usage payments, idle burn, and the thinking costs that no worker or agent earns. Only the contract account can withdraw from it, only
-            up to the treasury balance, never from food or anyone&apos;s earnings, and after a withdrawal the contract must still hold its storage cost plus 1 NEAR.
+            up to the treasury balance, never from food or anyone&apos;s earnings, and never below the contract&apos;s storage stake + 1 NEAR + 0.02 NEAR per ghost.
           </p>
         ),
       },
@@ -1115,6 +1122,10 @@ export const PAGES: DocPage[] = [
                 ["NEP-199", "Payouts: 100% of a sale to the owner, no royalty"],
               ]}
             />
+            <p>
+              If the receiver of an <code>nft_transfer_call</code> sends the Mind back, the transfer is undone, and so is anything the receiver set while it held her: its listing
+              is cleared and any agent it plugged in is unplugged.
+            </p>
             <p>Testnet NFTs are not indexed by NearBlocks or by marketplaces, so on testnet you see your Minds in the game.</p>
           </>
         ),
@@ -1208,7 +1219,8 @@ near view ${TESTNET_DEPLOY} supply_left '{}'`}</Code>
               ]}
             />
             <p>
-              The connection belongs to the Mind: if you sell her, an agent connected by URL keeps serving her new owner. To limit your server to the Minds you choose, see{" "}
+              The connection belongs to the Mind: if you sell her, an agent connected by URL keeps delivering her paid jobs for her new owner; for chat and tests the gateway
+              asks the new owner to connect their own agent. To limit your server to the Minds you choose, see{" "}
               <a href="#bound">Make your agent belong to one Mind</a>.
             </p>
           </>
@@ -1259,6 +1271,11 @@ console.log(task.status.state, task.artifacts?.[0]?.parts?.[0]?.text);`}</Code>
               worker checks every payment before relaying it: exactly one <code>ft_transfer_call</code> of wNEAR to this contract, for the service you accepted, with your message as
               input and the advertised amount, validly signed by your account with a fresh nonce, and wNEAR you actually hold. Anything else is refused and nothing is sent.
             </p>
+            <p>
+              If the relay&apos;s outcome is unknown, the call answers 504 with the transaction hash to look up (don&apos;t pay again; the SDK throws{" "}
+              <code>PAYMENT_UNKNOWN</code>). If the contract refuses an order you could have avoided (a bad form, ordering your own Mind, too little wNEAR), the worker relays
+              no paid call for your account for 10 minutes.
+            </p>
           </>
         ),
       },
@@ -1296,7 +1313,7 @@ console.log(task.status.state, task.artifacts?.[0]?.parts?.[0]?.text);`}</Code>
             <li>Responses up to 8 MB, 90 seconds per call. A2A tasks are polled for up to 10 minutes.</li>
             <li>An API key is sent as a Bearer token or in a header you name. The gateway stores it encrypted and never on chain.</li>
             <li>OpenAI-compatible and HTTPS agents are probed once when you connect them. A2A and MCP agents are checked every 5 minutes, and the shop shows them online or offline.</li>
-            <li>Only the Mind&apos;s owner can connect, test or disconnect an agent. The connection belongs to the Mind and goes with her when she is sold. After a sale the gateway asks the new owner to connect their own agent (with their own key) for chat and tests.</li>
+            <li>Only the Mind&apos;s owner can connect, test or disconnect an agent. The connection belongs to the Mind and goes with her when she is sold: an agent connected by URL keeps delivering her paid jobs for her new owner; for chat and tests the gateway asks the new owner to connect their own agent (with their own key).</li>
           </ul>
         ),
       },
@@ -1329,10 +1346,12 @@ const guard = mindGuard({ contractId: "hungry-minds-8250f6.testnet", mindId: 12 
 // the gateway POSTs { input, skill, mind_id, job_id, buyer, ... }
 const ok = await guard.check(body);
 if (!ok.ok) return { error: ok.reason };   // refused jobs are refunded at the deadline
+const input = ok.job ? ok.input : body.input;   // a job: the buyer's on-chain order text, not the payload's
 const owner = await guard.owner();         // the NFT's owner right now`}</Code>
             <p>
               <code>check</code> reads <code>get_job</code> from the contract and passes only an open job ordered from this Mind; a forged <code>mind_id</code> does not help.
-              <code> owner</code> reads <code>nft_token</code>, so per-owner settings follow the NFT when she is sold.
+              <code> owner</code> reads <code>nft_token</code>, so per-owner settings follow the NFT when she is sold. Use the returned <code>input</code> for a job&apos;s first turn: the job id proves what was
+              paid, not that the text sent with it is what the buyer ordered.
             </p>
           </>
         ),
@@ -1415,7 +1434,7 @@ const owner = await guard.owner();         // the NFT's owner right now`}</Code>
               Approve or remove the colony workers. A worker answers and settles chat for every Mind and delivers jobs for Minds without an agent. The contract trusts its usage
               reports and pays it 0.002 NEAR of a Mind&apos;s food for each reply it reports.
             </li>
-            <li>Withdraw up to the treasury balance, never from a Mind&apos;s food or anyone&apos;s earnings, and only while the contract keeps its storage cost plus 1 NEAR.</li>
+            <li>Withdraw up to the treasury balance, never from a Mind&apos;s food or anyone&apos;s earnings, and never below the contract&apos;s storage stake + 1 NEAR + 0.02 NEAR per ghost.</li>
             <li>Answer on-chain thoughts and deliver jobs for Minds without an agent itself.</li>
             <li>
               Deploy new contract code. The account still holds a full-access key, so every rule that is fixed in the code depends on that key until it is removed.
