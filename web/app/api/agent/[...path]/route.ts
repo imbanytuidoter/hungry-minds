@@ -8,7 +8,7 @@ import { KB, readCapped, tooLarge } from "@/lib/readBody";
 const CHAT_SERVER_URL = process.env.CHAT_SERVER_URL || "http://127.0.0.1:8788";
 
 async function forward(req: Request, path: string[]) {
-  if (!path.length || path.some((p) => !/^[\w.-]+$/.test(p))) return Response.json({ error: "not found" }, { status: 404 });
+  if (!path.length || path.some((p) => !/^[\w.-]+$/.test(p) || p === "." || p === "..")) return Response.json({ error: "not found" }, { status: 404 });
   const url = `${CHAT_SERVER_URL}/agent/${path.join("/")}${new URL(req.url).search}`;
   const fwd: Record<string, string> = { "content-type": "application/json" };
   for (const h of ["x-payment", "payment-signature"]) {

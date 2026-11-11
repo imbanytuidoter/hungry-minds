@@ -76,6 +76,7 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
   const notReady = new Map(); // job id -> when her Mind was last found unable to pay the thought
   const running = new Map(); // mind id -> her jobs being worked right now
   const navigate = makeRateLimiter(NAVIGATE_PER_MIN); // per account
+  const uploads = makeRateLimiter(20); // file uploads per account per minute
   let lastHealth = 0;
   let params = { at: -Infinity, cost: 0n };
   // What an error may say once stored or shown: no key from the agent's URL, no API key.
@@ -137,7 +138,8 @@ function makeGateway({ view, account, contractId, workerId, store, plan, readTok
 
   // ── turning results into files, links and the on-chain record ──
   function saveFiles(files, owner, mindId, jobId) {
-    return (files || []).map((f) => store.putFile({ ...f, owner, mindId, jobId }));
+    // flagged as a job result, so onFile only serves it once the job is delivered on chain
+    return (files || []).map((f) => store.putFile({ ...f, owner, mindId, jobId, result: true }));
   }
   const fileLine = (f) => `[file] ${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB): /api/agent/file/${f.id}`;
 
@@ -555,6 +557,7 @@ Answer with only JSON: {"picks":[{"id":<service id>,"input":<an object with the 
   async function onUpload(b) {
     const who = readToken(b.token);
     if (!who) return [401, { error: "sign in again" }];
+    if (!uploads(who)) return [429, { error: "too many uploads, wait a minute" }];
     const data = Buffer.from(String(b.base64 || ""), "base64");
     if (!data.length) return [400, { error: "empty file" }];
     if (data.length > MAX_UPLOAD) return [413, { error: "files up to 6 MB" }];
@@ -569,10 +572,18 @@ Answer with only JSON: {"picks":[{"id":<service id>,"input":<an object with the 
     if (!meta) return [404, { error: "no such file" }];
     const who = readToken(q.get("token") || "");
     if (!who) return [401, { error: "sign in again" }];
-    let ok = who === meta.owner;
-    if (!ok && meta.jobId !== null) {
-      const job = await view("get_job", { job_id: meta.jobId }).catch(() => null);
-      ok = !!job && (await canSeeJob(who, job));
+    let ok;
+    if (meta.result) {
+      // a job's result: only once it is delivered on chain, and only to the buyer or her owner
+      const job = meta.jobId !== null ? await view("get_job", { job_id: meta.jobId }).catch(() => null) : null;
+      ok = !!job && job.status === "Delivered" && (await canSeeJob(who, job));
+    } else {
+      // a free-standing upload (the buyer's own attachment): its owner, or anyone on its job
+      ok = who === meta.owner;
+      if (!ok && meta.jobId !== null) {
+        const job = await view("get_job", { job_id: meta.jobId }).catch(() => null);
+        ok = !!job && (await canSeeJob(who, job));
+      }
     }
     if (!ok && meta.mindId !== null && meta.mindId !== undefined) ok = who === (await ownerOf(meta.mindId));
     if (!ok) return [403, { error: "not your file" }];

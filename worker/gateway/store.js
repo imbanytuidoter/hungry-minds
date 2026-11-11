@@ -98,11 +98,25 @@ class Store {
   }
 
   // ── files ──
-  putFile({ name, mime, data, owner, mindId, jobId }) {
+  putFile({ name, mime, data, owner, mindId, jobId, result }) {
     const id = crypto.randomBytes(12).toString("hex");
     fs.writeFileSync(path.join(this.filesDir, id), data);
     const sha256 = crypto.createHash("sha256").update(data).digest("hex");
-    this.s.files[id] = { name: String(name || "file").slice(0, 120), mime: String(mime || "application/octet-stream").slice(0, 100), size: data.length, sha256, owner, mindId, jobId: jobId ?? null, ts: Date.now() };
+    this.s.files[id] = { name: String(name || "file").slice(0, 120), mime: String(mime || "application/octet-stream").slice(0, 100), size: data.length, sha256, owner, mindId, jobId: jobId ?? null, result: !!result, ts: Date.now() };
+    // bound the store: drop the oldest files past the cap, so the metadata JSON (rewritten on
+    // each save) and the disk can't grow without limit
+    const MAX_FILES = 2000;
+    const ids = Object.keys(this.s.files);
+    if (ids.length > MAX_FILES) {
+      for (const old of ids.sort((a, b) => this.s.files[a].ts - this.s.files[b].ts).slice(0, ids.length - MAX_FILES)) {
+        try {
+          fs.rmSync(path.join(this.filesDir, old), { force: true });
+        } catch {
+          /* already gone */
+        }
+        delete this.s.files[old];
+      }
+    }
     this.save();
     return { id, ...this.s.files[id] };
   }

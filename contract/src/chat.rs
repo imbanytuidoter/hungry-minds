@@ -132,6 +132,22 @@ impl Contract {
         NearToken::from_yoctonear(total)
     }
 
+    /// Take back your own unspent chat credits. The worker settles usage every minute, so
+    /// anything not yet settled comes back here; a pending settle for already-sent messages
+    /// simply finds fewer credits and charges only what is left.
+    #[payable]
+    pub fn withdraw_chat_credits(&mut self) -> NearToken {
+        near_sdk::assert_one_yocto();
+        let caller = env::predecessor_account_id();
+        let mut credits = chat_credits();
+        let amount = credits.get(&caller).copied().unwrap_or(0);
+        require!(amount > 0, "you have no chat credits to withdraw");
+        credits.remove(&caller);
+        env::log_str(&format!("chat_credits_withdrawn account={caller} amount={amount}"));
+        near_sdk::Promise::new(caller).transfer(NearToken::from_yoctonear(amount));
+        NearToken::from_yoctonear(amount)
+    }
+
     pub fn chat_credits_of(&self, account_id: AccountId) -> NearToken {
         NearToken::from_yoctonear(chat_credits().get(&account_id).copied().unwrap_or(0))
     }
@@ -257,6 +273,27 @@ mod tests {
         assert_eq!(m.owner_unclaimed.as_yoctonear(), 18 * MILLI);
         assert_eq!(c.treasury_balance().as_yoctonear(), 652 * MILLI);
         assert_eq!(earned(&c), 4 * MILLI);
+    }
+
+    #[test]
+    fn a_guest_withdraws_their_unspent_credits() {
+        let mut c = colony();
+        as_who("bob.near", 30 * MILLI);
+        c.buy_chat_credits();
+        as_who("worker.near", 0);
+        c.settle_chats(1, vec![item("bob.near", false, 1)], None); // one message spent (0.01)
+        as_who("bob.near", 1); // one yocto for the withdraw
+        let back = c.withdraw_chat_credits();
+        assert_eq!(back.as_yoctonear(), 20 * MILLI); // the rest comes back
+        assert_eq!(c.chat_credits_of("bob.near".parse().unwrap()).as_yoctonear(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "no chat credits")]
+    fn withdrawing_with_no_credits_is_refused() {
+        let mut c = colony();
+        as_who("bob.near", 1);
+        c.withdraw_chat_credits();
     }
 
     #[test]

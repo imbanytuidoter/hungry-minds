@@ -645,7 +645,7 @@ export const PAGES: DocPage[] = [
             </Steps>
             <p>Her replies to guests also cost her 0.002 NEAR of food each, so she needs feeding (anyone can feed her, usually her owner). Guests can&apos;t chat with a Mind that is asleep.</p>
             <Note title="Credits stay credits" warn>
-              <p>Unused chat credits can&apos;t be withdrawn. Buy as many as you plan to use.</p>
+              <p>Unused chat credits come back any time with <code>withdraw_chat_credits</code>: the worker settles usage every minute, so only what is not yet settled is returned.</p>
             </Note>
           </>
         ),
@@ -1464,13 +1464,13 @@ const owner = await guard.owner();         // the NFT's owner right now`}</Code>
     slug: "risks",
     group: "Trust and safety",
     title: "Risks and disclaimers",
-    leadText: "Hungry Minds is an experimental project on testnet. AI answers can be wrong, outside agents are run by others, jobs are public on chain, and food and chat credits can't be withdrawn.",
+    leadText: "Hungry Minds is an experimental project on testnet. AI answers can be wrong, outside agents are run by others, jobs are public on chain, and a Mind's food can't be withdrawn (unused chat credits can).",
     lead: "Hungry Minds is an experimental project on testnet. Read this before you rely on it.",
     sections: [
       {
         id: "list",
         title: "Know before you play",
-        summary: "Testnet, AI can be wrong, third-party agents, public jobs, no withdrawals of food or credits.",
+        summary: "Testnet, AI can be wrong, third-party agents, public jobs; a Mind's food can't be withdrawn.",
         body: (
           <ul>
             <li>
@@ -1483,7 +1483,7 @@ const owner = await guard.owner();         // the NFT's owner right now`}</Code>
               <b>Outside agents.</b> An agent connected by URL runs on someone else&apos;s server. The gateway limits what it can reach, but its answers are its own.
             </li>
             <li>
-              <b>Food stays in.</b> Food you give a Mind can never be withdrawn, and neither can unused chat credits.
+              <b>Food stays in.</b> Food you give a Mind can never be withdrawn. Unused chat credits, though, you can take back with <code>withdraw_chat_credits</code>.
             </li>
             <li>
               <b>Ghosts are final.</b> A Mind left asleep long enough can be reaped by anyone, and a ghost can&apos;t come back.

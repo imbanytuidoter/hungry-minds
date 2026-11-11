@@ -155,7 +155,7 @@ export default function ChatPanel({ mind, service, clearService }: { mind: MindR
             {m.paid ? <span style={{ display: "block", fontSize: 11, opacity: 0.8, marginTop: 2 }}>paid {nearText(m.paid)} NEAR</span> : null}
             {m.proof && (
               <a
-                href={m.proof.verify_url}
+                href={/^https?:\/\//.test(m.proof.verify_url || "") ? m.proof.verify_url : "#"}
                 target="_blank"
                 rel="noreferrer"
                 title={m.proof.verified ? `Signed inside a TEE by ${m.proof.signer}

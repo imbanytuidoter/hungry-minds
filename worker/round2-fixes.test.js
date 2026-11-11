@@ -338,8 +338,8 @@ test("R2 F7: food for one thought: only one of her jobs runs at a time", async (
 
 // ── R2 F4 ──
 test("R2 F4: URLs in errors lose their credentials, query and fragment; the API key is masked", () => {
-  assert.equal(scrubUrls("can't reach an MCP server at http://127.0.0.1:1/mcp?token=MCPSECRET456 (fetch failed)"), "can't reach an MCP server at http://127.0.0.1:1/mcp (fetch failed)");
-  assert.equal(scrubUrls("GET https://u:pw@a.example.com/x#k=1 failed"), "GET https://a.example.com/x failed");
+  assert.equal(scrubUrls("can't reach an MCP server at http://127.0.0.1:1/mcp?token=MCPSECRET456 (fetch failed)"), "can't reach an MCP server at http://127.0.0.1:1 (fetch failed)");
+  assert.equal(scrubUrls("GET https://u:pw@a.example.com/x#k=1 failed"), "GET https://a.example.com failed");
   assert.equal(scrubUrls("bad key sk-live-123456 rejected", ["sk-live-123456"]), "bad key *** rejected");
   assert.equal(scrubUrls("no url here"), "no url here");
 });

@@ -19,26 +19,29 @@ function makeRateLimiter(perWindow, windowMs = 60_000) {
   };
 }
 
-/** The agent's address as shown publicly: no user:password@, no ?query or #fragment (owners
- *  sometimes put a key there). An official agent's "url" is its id and is shown as is. */
+/** The agent's address as shown publicly: scheme + host only. Owners sometimes put a key in
+ *  the userinfo, the query, the fragment, or a path segment, so none of those is ever shown.
+ *  An official agent's "url" is its id and has no scheme, so it is shown as is. */
 function publicUrl(raw) {
   try {
-    const u = new URL(raw);
-    u.username = "";
-    u.password = "";
-    u.search = "";
-    u.hash = "";
-    return u.href;
+    return new URL(raw).origin;
   } catch {
-    return String(raw || "").split(/[?#]/)[0];
+    return String(raw || "").split(/[/?#]/).slice(0, 3).join("/");
   }
 }
 
-/** An error text with every URL in it cut down the same way (no user:pass@, nothing from the
- *  first ? or #), and any of `secrets` (the owner's API key) masked. Agent SDKs and fetch put
- *  the full address in their errors; those end up in the public /status and in chat replies. */
+/** An error text with every URL in it cut to scheme + host (no userinfo, path, query or
+ *  fragment, any of which can carry a key), and any of `secrets` (the owner's API key) masked.
+ *  Agent SDKs and fetch put the full address in their errors; those end up in the public
+ *  /status and in chat replies. */
 function scrubUrls(text, secrets = []) {
-  let s = String(text ?? "").replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (u) => u.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/\s?#]*@/i, "$1").replace(/[?#].*$/, ""));
+  let s = String(text ?? "").replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, (u) => {
+    try {
+      return new URL(u).origin;
+    } catch {
+      return u.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/\s?#]*@/i, "$1").replace(/[/?#].*$/, "");
+    }
+  });
   for (const k of secrets) if (typeof k === "string" && k.length >= 4) s = s.split(k).join("***");
   return s;
 }

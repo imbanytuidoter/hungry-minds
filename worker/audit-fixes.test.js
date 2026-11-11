@@ -124,7 +124,7 @@ test("A5 F5/F6: skills and schemas are bounded; a 4 KB+ schema is dropped, promp
 });
 
 test("A5 F10: the public agent URL has no credentials, query or fragment", () => {
-  assert.equal(publicUrl("https://user:pw@agent.example.com/mcp?key=SECRET#x"), "https://agent.example.com/mcp");
+  assert.equal(publicUrl("https://user:pw@agent.example.com/mcp?key=SECRET#x"), "https://agent.example.com");
   assert.equal(publicUrl("polymarket"), "polymarket", "an official agent's id stays");
 });
 
@@ -220,7 +220,7 @@ test("A5 F4: after a sale the old owner's agent refuses the new owner's tests an
   const st = (await call("GET", "status"))[1].agents[0];
   assert.equal(st.needs_reconnect, true);
   assert.equal(st.online, false);
-  assert.equal(st.url, "https://agent.example.com/run", "no key or credentials in the public URL");
+  assert.equal(st.url, "https://agent.example.com", "no key or credentials in the public URL");
   assert.equal((await call("POST", "disconnect", { token: "tok-x", mindId: 1 }))[0], 403, "a stranger can't");
   assert.equal((await call("POST", "disconnect", { token: "tok-old", mindId: 1 }))[0], 200, "whoever connected it takes it back");
   assert.equal(store.conn(1), null);
