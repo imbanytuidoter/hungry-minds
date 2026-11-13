@@ -1,5 +1,5 @@
 // hireMind signs a payment described by the server it calls: checkRow refuses any row that is
-// not exactly the payment the caller agreed to (A5 F1).
+// not exactly the payment the caller agreed to.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { checkRow, ensureWnear, hireMind, yoctoOf, paymentError, paymentFor, HIGH_PRICE } = require("./x402");
@@ -60,8 +60,7 @@ test("hireMind needs contractId", async () => {
   await assert.rejects(hireMind({ url: "http://127.0.0.1:1/x", accountId: "me.testnet", text: "hi" }), /needs contractId/);
 });
 
-// ── round 2 ──
-test("R2 M-2: a yoctoNEAR string passed as maxPrice throws; above 100 NEAR needs allowHighPrice", async () => {
+test("a yoctoNEAR string passed as maxPrice throws; above 100 NEAR needs allowHighPrice", async () => {
   assert.throws(() => yoctoOf("500000000000000000000000"), /maxPrice is in NEAR; pass a bigint for yocto/);
   assert.throws(() => yoctoOf("1234567"), /pass a bigint for yocto/);
   assert.throws(() => yoctoOf("1234567.5"), /pass a bigint for yocto/);
@@ -77,7 +76,7 @@ test("R2 M-2: a yoctoNEAR string passed as maxPrice throws; above 100 NEAR needs
   await assert.rejects(hireMind({ url: "http://127.0.0.1:1/x", contractId: C, accountId: "me.testnet", text: "hi", maxPrice: "500000000000000000000000" }), /pass a bigint for yocto/, "before any network call");
 });
 
-test("R2 L-1: a 504 is PAYMENT_UNKNOWN with the transaction; a re-sent payment is ALREADY_RELAYED", () => {
+test("a 504 is PAYMENT_UNKNOWN with the transaction; a re-sent payment is ALREADY_RELAYED", () => {
   const e = paymentError(504, { error: { code: -32005, message: "the transaction AbC did not show up in time", data: { transaction: "AbC", payer: "me.testnet" } } }, { contractId: C, accountId: "me.testnet" });
   assert.equal(e.code, "PAYMENT_UNKNOWN");
   assert.equal(e.transaction, "AbC");
@@ -91,7 +90,7 @@ test("R2 L-1: a 504 is PAYMENT_UNKNOWN with the transaction; a re-sent payment i
   assert.match(refused.message, /missing field: account/);
 });
 
-test("R2 L-4: the payment signs the trimmed text, as the worker compares it", async () => {
+test("the payment signs the trimmed text, as the worker compares it", async () => {
   const { KeyPair } = require("near-api-js");
   const key = KeyPair.fromRandom("ed25519");
   let signedArgs = null;

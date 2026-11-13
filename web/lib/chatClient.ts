@@ -42,7 +42,6 @@ export async function chatSession(account: string, sign: SignText, fresh = false
 }
 
 /** True if a chat session is already open, so the next message needs no signature. */
-export const hasChatSession = (account: string) => !!savedSession(account);
 
 export type ChatReply = { reply: string; own: boolean; left: number; proof?: import("@/lib/game/engine").ReplyProof | null; via?: string | null };
 

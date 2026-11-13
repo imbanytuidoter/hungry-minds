@@ -1,5 +1,6 @@
-// Regression tests for the fixes from the A4/A5/A6/A8 reviews (worker side). Each test names
-// the finding it covers.
+// Safety checks on the worker: the phrasebook's limits, byte-safe clipping, secrets, the reset
+// script, private-address detection, gateway bounds, chat allowances, the Navigator, sold Minds
+// and x402 inputs. Everything is mocked: no chain, no model, only 127.0.0.1.
 process.env.CHAT_PORT = "0"; // chat-server reads its port on load: any free one
 delete process.env.CHAT_SECRET;
 
@@ -32,22 +33,22 @@ test.after(() => {
 });
 const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 
-// ── A8 M2: a guest's paid thought is never "answered" from the phrasebook ──
-test("A8 M2: the phrasebook may answer only the owner's thought, or anything when no model exists", () => {
+// ── a guest's paid thought is never "answered" from the phrasebook ──
+test("the phrasebook may answer only the owner's thought, or anything when no model exists", () => {
   assert.equal(phrasebookAllowed({ hasModel: true, byOwner: false }), false, "guest + model failed: leave it to time out (refund)");
   assert.equal(phrasebookAllowed({ hasModel: true, byOwner: true }), true);
   assert.equal(phrasebookAllowed({ hasModel: false, byOwner: false }), true, "no model at all: the phrasebook is her voice");
 });
 
-// ── A4 F7: results clipped by bytes ──
-test("A4 F7: clipUtf8 keeps whole characters within the byte limit", () => {
+// ── results clipped by bytes ──
+test("clipUtf8 keeps whole characters within the byte limit", () => {
   assert.equal(clipUtf8("abc", 2000), "abc");
   assert.equal(clipUtf8("😀😀😀", 9), "😀😀"); // 4 bytes each
   assert.equal(clipUtf8("aї", 2), "a"); // ї is 2 bytes: not split
 });
 
-// ── A4 F5: no short secrets ──
-test("A4 F5: an empty or short secret file is replaced, a short CHAT_SECRET is refused", () => {
+// ── no short secrets ──
+test("an empty or short secret file is replaced, a short CHAT_SECRET is refused", () => {
   const dir = tmp();
   const file = path.join(dir, ".chat-secret-c.testnet");
   fs.writeFileSync(file, "");
@@ -73,8 +74,8 @@ test("A4 F5: an empty or short secret file is replaced, a short CHAT_SECRET is r
   }
 });
 
-// ── A4 F6: replying after the head went out ──
-test("A4 F6: sendJson destroys a response whose head already went out, and never throws", () => {
+// ── replying after the head went out ──
+test("sendJson destroys a response whose head already went out, and never throws", () => {
   let destroyed = false;
   let wrote = false;
   sendJson({ headersSent: true, destroy: () => (destroyed = true), writeHead: () => (wrote = true) }, 500, { error: "x" });
@@ -87,8 +88,8 @@ test("A4 F6: sendJson destroys a response whose head already went out, and never
   assert.equal(out.code, 500, "a body that can't be serialized becomes a 500 before any head is written");
 });
 
-// ── A4 F4: a reset wipes the old deploy's worker files ──
-test("A4 F4: reset-contract finds exactly this contract's ledger, logs and gateway files", () => {
+// ── a reset wipes the old deploy's worker files ──
+test("reset-contract finds exactly this contract's ledger, logs and gateway files", () => {
   const dir = tmp();
   const c = "hm.testnet";
   const mine = [`.chat-ledger-${c}.json`, `.chat-ledger-${c}.json.tmp`, `.chat-log-${c}.jsonl`, `.gateway-${c}.json`, `.gateway-files-${c}`];
@@ -97,8 +98,8 @@ test("A4 F4: reset-contract finds exactly this contract's ledger, logs and gatew
   assert.deepEqual(staleWorkerFiles(dir, c).map((f) => path.basename(f)).sort(), [...mine].sort());
 });
 
-// ── A5 F7: IPv6 forms that carry a private IPv4 ──
-test("A5 F7: mapped, compatible, NAT64, 6to4 and Teredo forms of private IPv4 are private", () => {
+// ── IPv6 forms that carry a private IPv4 ──
+test("mapped, compatible, NAT64, 6to4 and Teredo forms of private IPv4 are private", () => {
   for (const ip of ["::ffff:7f00:1", "::ffff:127.0.0.1", "::ffff:a9fe:a9fe", "::ffff:0:7f00:1", "::7f00:1", "::127.0.0.1", "64:ff9b::7f00:1", "64:ff9b::a00:1", "2002:7f00:1::", "2002:a9fe:a9fe::1", "2001:0:4136:e378:8000:63bf:80ff:fffe", "::", "::1", "fe80::1%eth0", "fd00::1", "ff02::1", "not-an-ip"])
     assert.equal(privateIp(ip), true, ip);
   for (const ip of ["8.8.8.8", "::ffff:808:808", "64:ff9b::808:808", "2002:808:808::", "2606:4700:4700::1111", "2001:4860:4860::8888"])
@@ -107,8 +108,8 @@ test("A5 F7: mapped, compatible, NAT64, 6to4 and Teredo forms of private IPv4 ar
   assert.equal(privateIp(new URL("http://[::ffff:127.0.0.1]/").hostname.replace(/^\[|\]$/g, "")), true);
 });
 
-// ── A5 F5/F6, F10: bounded skills and schemas, clean public URL ──
-test("A5 F5/F6: skills and schemas are bounded; a 4 KB+ schema is dropped, prompts are capped", () => {
+// ── bounded skills and schemas, clean public URL ──
+test("skills and schemas are bounded; a 4 KB+ schema is dropped, prompts are capped", () => {
   const huge = { type: "object", properties: Object.fromEntries(Array.from({ length: 400 }, (_, i) => [`field_${i}`, { type: "string", description: "x".repeat(20) }])) };
   assert.equal(capSchema(huge), null);
   const small = { type: "object", properties: { q: { type: "string" } } };
@@ -123,13 +124,13 @@ test("A5 F5/F6: skills and schemas are bounded; a 4 KB+ schema is dropped, promp
   assert.ok(Buffer.byteLength(argLine(huge)) <= MAX_SCHEMA_PROMPT);
 });
 
-test("A5 F10: the public agent URL has no credentials, query or fragment", () => {
+test("the public agent URL has no credentials, query or fragment", () => {
   assert.equal(publicUrl("https://user:pw@agent.example.com/mcp?key=SECRET#x"), "https://agent.example.com");
   assert.equal(publicUrl("polymarket"), "polymarket", "an official agent's id stays");
 });
 
-// ── A4 F3 + F8: allowance counts her food, caches params and get_mind ──
-test("A4 F3/F8: a guest (and her keeper) can't chat past what her food can pay; params and get_mind are cached", async () => {
+// ── allowance counts her food, caches params and get_mind ──
+test("a guest (and her keeper) can't chat past what her food can pay; params and get_mind are cached", async () => {
   const dir = tmp();
   const COST = 2_000_000_000_000_000_000_000n;
   const counts = {};
@@ -164,7 +165,7 @@ test("A4 F3/F8: a guest (and her keeper) can't chat past what her food can pay; 
   }
 });
 
-test("A4 F3: the ledger counts every unsettled message on a Mind, keeper's and guests'", () => {
+test("the ledger counts every unsettled message on a Mind, keeper's and guests'", () => {
   const l = new Ledger(path.join(tmp(), "l.json"));
   l.add(1, "own.testnet", true, "p", "r");
   l.add(1, "g.testnet", false, "p", "r");
@@ -174,7 +175,7 @@ test("A4 F3: the ledger counts every unsettled message on a Mind, keeper's and g
   assert.equal(l.pendingOnMind(1), 2, "a batch in flight still counts");
 });
 
-// ── gateway: A6 F1 / A5 F3 navigate, A5 F4 sold Minds ──
+// ── gateway: the Navigator, sold Minds ──
 function gatewayRig({ owner = "new.testnet" } = {}) {
   const dir = tmp();
   const store = new Store(dir, "c.testnet", "s".repeat(64));
@@ -199,7 +200,7 @@ function gatewayRig({ owner = "new.testnet" } = {}) {
   return { gw, store, call, plans: () => plans, views };
 }
 
-test("A6 F1 / A5 F3: the Navigator needs a session, is rate limited per account, and reads the catalogue once a minute", async () => {
+test("the Navigator needs a session, is rate limited per account, and reads the catalogue once a minute", async () => {
   const { call, plans, views } = gatewayRig();
   assert.equal((await call("POST", "navigate", { text: "check my wallet" }))[0], 401, "no token: no model call");
   assert.equal(plans(), 0);
@@ -210,7 +211,7 @@ test("A6 F1 / A5 F3: the Navigator needs a session, is rate limited per account,
   assert.equal(views.colony_snapshot, 1, "the catalogue is cached");
 });
 
-test("A5 F4: after a sale the old owner's agent refuses the new owner's tests and chat; either can disconnect", async () => {
+test("after a sale the old owner's agent refuses the new owner's tests and chat; either can disconnect", async () => {
   const { gw, store, call } = gatewayRig();
   const t = await call("POST", "test", { token: "tok-new", mindId: 1 });
   assert.equal(t[0], 409);
@@ -226,8 +227,8 @@ test("A5 F4: after a sale the old owner's agent refuses the new owner's tests an
   assert.equal(store.conn(1), null);
 });
 
-// ── A5 F2: what serde would refuse is never relayed ──
-test("A5 F2: lone surrogates, 1e400 and deep nesting are caught before the relay", () => {
+// ── what serde would refuse is never relayed ──
+test("lone surrogates, 1e400 and deep nesting are caught before the relay", () => {
   assert.match(serdeRefuses(JSON.parse('{"a":1e400}')), /too large/);
   assert.match(serdeRefuses(JSON.parse('{"a":"\\ud800"}')), /lone surrogate/);
   assert.match(serdeRefuses(JSON.parse('{"\\udc00":1}')), /lone surrogate/);
@@ -236,7 +237,7 @@ test("A5 F2: lone surrogates, 1e400 and deep nesting are caught before the relay
   assert.throws(() => checkPayment("x", { contractId: "c", network: "testnet", text: "\ud800 hi", rows: [] }), /lone surrogate/);
 });
 
-// an x402 rig like poc-a5/x402-refusal.js: every relay "lands" with the contract's refusal
+// an x402 rig: every relay "lands" with the contract's refusal
 function x402Rig(schema) {
   const CONTRACT = "hm.testnet", WRAP = "wrap.testnet";
   const PRICE = 10_000_000_000_000_000_000_000n;
@@ -292,7 +293,7 @@ function x402Rig(schema) {
   return { send, relayed: () => relayed };
 }
 
-test("A5 F2: a form input serde would refuse is not relayed", async () => {
+test("a form input serde would refuse is not relayed", async () => {
   const r = x402Rig(JSON.stringify({ type: "object", properties: { token: { type: "string" } }, required: ["token"] }));
   for (const input of ['{"token":"x","n":1e400}', '{"token":"\\ud800"}', `{"token":"x","z":${"[".repeat(100)}${"]".repeat(100)}}`]) {
     const out = await r.send(input);
@@ -302,7 +303,7 @@ test("A5 F2: a form input serde would refuse is not relayed", async () => {
   assert.equal(r.relayed(), 0, "the worker paid no gas for any of them");
 });
 
-test("A5 F2: after the contract refuses a relayed order, that buyer is not relayed again for a while", async () => {
+test("after the contract refuses a relayed order, that buyer is not relayed again for a while", async () => {
   const r = x402Rig(null);
   const first = await r.send("hello");
   assert.equal(first.code, 402);

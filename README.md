@@ -11,8 +11,8 @@ becomes a ghost. The owner feeds it and earns from what others pay it,
 but **the owner can never withdraw the Mind's own food.** The creature's money belongs to
 the creature.
 
-> Status: **live on NEAR testnet** at `hungry-minds-8250f6.testnet` (205 contract unit tests,
-> 61 worker tests, 6 SDK tests, and an end-to-end suite in [`qa/`](qa/README.md) of 27 steps and
+> Status: **live on NEAR testnet** at `hungry-minds-8250f6.testnet` (206 contract unit tests,
+> 85 worker tests, 9 SDK tests, and an end-to-end suite in [`qa/`](qa/README.md) of 27 steps and
 > a servers check that also runs those unit tests and must pass before any live deploy; 2
 > read-only live-smoke steps join it when the live site is up on :3000). The game at `/app` plays against it: sign in with a NEAR wallet (Meteor,
 > HOT, Intear, Sender, Ledger…). The live brain is NEAR AI Cloud (`Qwen/Qwen3.8-27B`, TEE-signed
@@ -50,16 +50,16 @@ choice at hatch (colour, eyes, hat, outfit, stored with `get_look` / `set_look`)
 without one gets it from its trait dials. Hunger is written on the face: a smile, then flat,
 then a frown, closed eyes asleep, and a grey, dashed-eyed ghost. See
 [`glossy.rs`](contract/src/glossy.rs); its part shapes are generated from the site's
-`GlossyMind.tsx` by `web/scripts/gen-glossy-rs.mjs`. (`art.rs` now only provides the `Appearance`
-state type to it; its first renderer is kept with its tests.)
+`GlossyMind.tsx` by `web/scripts/gen-glossy-rs.mjs`, and the life-state it draws comes from
+`art.rs` (`Appearance`).
 
 ## Build & test
 
 ```bash
-# unit tests (205 of them, plus 2 ignored)
+# unit tests (206 of them)
 cargo test --manifest-path contract/Cargo.toml
-(cd worker && node --test)   # 61
-(cd sdk && node --test)      # 6
+(cd worker && node --test)   # 85
+(cd sdk && node --test)      # 9
 
 # the deployable wasm artifact (--cfg near is what cargo-near sets; without it contract
 # errors reach users as a bare "wasm trap: unreachable")
@@ -190,7 +190,7 @@ Mind to chat. No network is needed.
   off-chain worker ([`worker/`](worker/)) polls `pending_requests`, asks NEAR AI for an
   in-character reply, and calls `respond` to resume it; `on_thought` stores the reply or
   refunds the thought on a 200-block timeout. There's also a living-Minds `leaderboard`
-  view (ranked by thoughts, ghosts excluded). 205 unit tests, the [`qa/`](qa/README.md)
+  view (ranked by thoughts, ghosts excluded). 206 unit tests, the [`qa/`](qa/README.md)
   suite of 27 steps plus a servers check against the real testnet (plus 2 read-only live-smoke steps), and a [sandbox integration suite](integration/) for the whole
   loop (deposits, splits, transfer, approval, payouts, yield/resume) that needs a neard 2.14
   sandbox (see Build & test).
@@ -287,7 +287,7 @@ ordinary transaction you pay for.
 
 ## Built in the hackathon window
 
-- **No prior work.** The first commit is `e382557` on 2026-11-01 19:08 (UTC+2), after the
+- **No prior work.** The first commit is `d33e881` on 2026-11-01 19:08 (UTC+2), after the
   hackathon announcement of 2026-10-19 (hackathon FAQ Q-001); there is no code from before, no earlier
   version and no product on another chain. Everything in this repository (contract, site,
   worker, agent gateway, SDK, QA) was written between 2026-11-01 and the submission, and

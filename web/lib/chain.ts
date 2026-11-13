@@ -57,7 +57,6 @@ export const RPC_URLS: string[] = [
     ? ["https://free.rpc.fastnear.com", "https://near.drpc.org", "https://rpc.mainnet.near.org"]
     : ["https://test.rpc.fastnear.com", "https://near-testnet.drpc.org", "https://rpc.testnet.near.org"]),
 ];
-export const RPC_URL = RPC_URLS[0];
 /** What the sign-in modal offers on this network (EVM wallets are mainnet only, see wallets.ts). */
 export const WALLET_KIND = NETWORK === "mainnet" ? "a NEAR or EVM wallet" : "a NEAR wallet";
 /** For wallet libraries that take one node URL (or use the first of a list without our
@@ -94,7 +93,6 @@ async function rpcQuery(params: object): Promise<RpcReply> {
 }
 
 const GAS_DEFAULT = "100000000000000"; // 100 Tgas
-const GAS_THINK = "300000000000000"; // 300 Tgas — think/chat park a yield + callback
 const ONE_YOCTO = "1";
 
 /** NEAR (decimal) -> yoctoNEAR string, to 6-decimal precision. */
@@ -133,12 +131,6 @@ export type MindOnChain = {
   last_reply_ts: number;
 };
 
-export type PendingRequest = {
-  request_id: number;
-  mind_id: number;
-  prompt: string;
-  by_owner: boolean;
-};
 
 // ── Views (no wallet needed) ───────────────────────────────────────────────
 
@@ -156,27 +148,7 @@ export async function viewContract<T>(method: string, args: object = {}): Promis
   return JSON.parse(text) as T;
 }
 
-export const getMind = (id: number) => viewContract<MindOnChain | null>("get_mind", { id });
-export const mindState = (id: number) => viewContract<string | null>("mind_state", { id });
-export const svgFor = (id: number) => viewContract<string | null>("svg_for", { id });
-export const svgForBare = (id: number) =>
-  viewContract<string | null>("svg_for_bare", { id });
-export const lastThought = (id: number) => viewContract<string | null>("last_thought", { id });
-export const totalMinds = () => viewContract<number>("total_minds");
-/** Prepaid guest chat credits (yoctoNEAR), spent as the worker settles chats. */
-export const chatCreditsOf = (account_id: string) => viewContract<string>("chat_credits_of", { account_id });
-export const treasuryBalance = () => viewContract<string>("treasury_balance");
 
-export type MindRankOnChain = {
-  id: number;
-  name: string;
-  thoughts: number;
-  balance: string; // yoctoNEAR
-  state: string;
-};
-/** Living-Minds leaderboard (most thoughts first; ghosts excluded). */
-export const leaderboard = (limit = 10) =>
-  viewContract<MindRankOnChain[]>("leaderboard", { limit });
 /** Governable economy prices (contract.rs params). NearToken fields are yocto strings. */
 export type EconomyParamsOnChain = {
   thought_cost: string;
@@ -185,11 +157,6 @@ export type EconomyParamsOnChain = {
   mint_price: string;
   idle_rate_per_day: number;
 };
-export const economyParams = () => viewContract<EconomyParamsOnChain>("params");
-/** Food right now, including idle drain not yet settled on chain (yocto string). */
-export const liveBalance = (id: number) => viewContract<string | null>("live_balance", { id });
-/** State right now, including idle drain not yet settled on chain. */
-export const liveState = (id: number) => viewContract<string | null>("live_state", { id });
 
 /** An account's spendable NEAR (yocto string) — plain RPC, not a contract view.
  *  The part locked for the account's own storage (1e19 yocto per byte) is not spendable. */
@@ -201,22 +168,6 @@ export async function accountBalance(account_id: string): Promise<string> {
   return (free > BigInt(0) ? free : BigInt(0)).toString();
 }
 
-export const pendingRequests = () =>
-  viewContract<PendingRequest[]>("pending_requests", {});
-export const nftTokensForOwner = (account_id: string, limit = 50) =>
-  viewContract<unknown[]>("nft_tokens_for_owner", { account_id, limit });
-export const nftTokens = (from = 0, limit = 50) =>
-  viewContract<unknown[]>("nft_tokens", { from_index: String(from), limit });
-export const nftIsApproved = (
-  id: number,
-  approved_account_id: string,
-  approval_id?: number
-) =>
-  viewContract<boolean>("nft_is_approved", {
-    token_id: String(id),
-    approved_account_id,
-    approval_id: approval_id ?? null,
-  });
 
 // ── Writes (need a signer) ─────────────────────────────────────────────────
 
@@ -277,13 +228,6 @@ export type LookOnChain = { tone: number; eyes: number; hat: number; outfit: num
 
 export const hatchMind = (s: Signer, name: string, look?: LookOnChain) =>
   callContract(s, "hatch_mind", { name, look: look ?? null }, nearToYocto(1));
-/** Resume a parked thought with a reply. Only an approved responder (the worker), the contract account, or the keeper for their own thought may answer. */
-export const respond = (s: Signer, request_id: number, reply: string) =>
-  callContract(s, "respond", { request_id, reply }, "0", "60000000000000");
-export const think = (s: Signer, id: number, prompt: string) =>
-  callContract(s, "think", { id, prompt }, "0", GAS_THINK);
-export const chat = (s: Signer, id: number, prompt: string, near = 0.01) =>
-  callContract(s, "chat", { id, prompt }, nearToYocto(near), GAS_THINK);
 /** Prepay chat credits for talking to other keepers' Minds (one approval for many messages). */
 export const buyChatCredits = (s: Signer, yocto: string) =>
   callContract(s, "buy_chat_credits", {}, yocto);
@@ -298,8 +242,6 @@ export const reap = (s: Signer, id: number) => callContract(s, "reap", { id });
 /** `yocto` is the exact on-chain revive price (params), never a rounded copy. */
 export const revive = (s: Signer, id: number, yocto: string) =>
   callContract(s, "revive", { id }, yocto);
-/** Permissionless: realise a Mind's overdue idle drain on chain. */
-export const settle = (s: Signer, id: number) => callContract(s, "settle", { id });
 
 // ── Colony layer (contract/src/colony.rs) ──────────────────────────────────
 
@@ -414,32 +356,12 @@ export const rateJob = (s: Signer, job_id: number, stars: number) => callContrac
 export const closeJob = (s: Signer, job_id: number) => callContract(s, "close_job", { job_id });
 export const refundJob = (s: Signer, job_id: number) => callContract(s, "refund_job", { job_id });
 
-export const getLook = (id: number) => viewContract<LookOnChain | null>("get_look", { id });
-export const supplyLeft = () => viewContract<number>("supply_left");
-export const ghostWindowMs = () => viewContract<number>("ghost_window_ms");
 
 /** First look costs a little storage (excess refunded). */
 export const setLook = (s: Signer, id: number, look: LookOnChain) =>
   callContract(s, "set_look", { id, look }, nearToYocto(0.01));
-export const publishService = (
-  s: Signer,
-  mind_id: number,
-  title: string,
-  description: string,
-  category: number,
-  priceNear: number,
-  unit: string
-) =>
-  callContract(
-    s,
-    "publish_service",
-    { mind_id, title, description, category, price: nearToYocto(priceNear), unit },
-    nearToYocto(0.01)
-  );
 export const setServiceLive = (s: Signer, service_id: number, live: boolean) =>
   callContract(s, "set_service_live", { service_id, live });
-export const orderService = (s: Signer, service_id: number, prompt: string, near: number) =>
-  callContract(s, "order_service", { service_id, prompt }, nearToYocto(near), GAS_THINK);
 export const listForSale = (s: Signer, id: number, priceNear: number) =>
   callContract(s, "list_for_sale", { id, price: nearToYocto(priceNear) });
 export const unlist = (s: Signer, id: number) => callContract(s, "unlist", { id });
@@ -447,27 +369,6 @@ export const unlist = (s: Signer, id: number) => callContract(s, "unlist", { id 
  *  a re-listing at another price between the look and the buy makes the contract refuse. */
 export const buyMind = (s: Signer, id: number, yocto: string) =>
   callContract(s, "buy_mind", { id, expected_price: yocto }, yocto);
-export const nftTransfer = (s: Signer, id: number, receiver_id: string) =>
-  callContract(s, "nft_transfer", { receiver_id, token_id: String(id) }, ONE_YOCTO);
-// NEP-178: let a marketplace transfer the Mind on the owner's behalf. `near` covers the
-// approval's storage (excess refunded); `msg` notifies the approved contract if given.
-export const nftApprove = (
-  s: Signer,
-  id: number,
-  account_id: string,
-  msg?: string,
-  near = 0.01
-) =>
-  callContract(
-    s,
-    "nft_approve",
-    { token_id: String(id), account_id, msg: msg ?? null },
-    nearToYocto(near)
-  );
-export const nftRevoke = (s: Signer, id: number, account_id: string) =>
-  callContract(s, "nft_revoke", { token_id: String(id), account_id }, ONE_YOCTO);
-export const nftRevokeAll = (s: Signer, id: number) =>
-  callContract(s, "nft_revoke_all", { token_id: String(id) }, ONE_YOCTO);
 
 function toBase64(s: string): string {
   if (typeof btoa === "function") return btoa(s);

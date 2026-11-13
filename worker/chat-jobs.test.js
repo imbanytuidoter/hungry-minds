@@ -1,5 +1,6 @@
-// Regression tests for the round-2 audit fixes (worker, gateway, x402). Each test names the
-// finding it covers. Everything is mocked: no chain, no model, only 127.0.0.1.
+// Chat, jobs and x402 behaviour under failure and load: empty model replies, a failing agent, rate
+// limits, concurrent guests, cached allowances, hidden results, paged jobs, hungry Minds.
+// Everything is mocked: no chain, no model, only 127.0.0.1.
 process.env.CHAT_PORT = "0"; // chat-server reads its port on load: any free one
 process.env.SETTLE_EVERY_MS = "3600000";
 process.env.GATEWAY_ALLOW_LOCAL = "1"; // the stand-in agents run on 127.0.0.1
@@ -71,8 +72,7 @@ async function chatRig(opts) {
   return { srv, chat, allowance };
 }
 
-// ── R2 F1 ──
-test("R2 F1: with a model configured, an empty reply is refused (503) and nothing is charged; without one the phrasebook answers", async () => {
+test("with a model configured, an empty reply is refused (503) and nothing is charged; without one the phrasebook answers", async () => {
   const a = await chatRig({ askLLM: async () => "" }); // hasModel defaults to true
   try {
     const [code, body] = await quiet(() => a.chat("guest.testnet"));
@@ -92,7 +92,6 @@ test("R2 F1: with a model configured, an empty reply is refused (503) and nothin
   }
 });
 
-// ── R2 F3 ──
 function fakeGateway({ fails }) {
   let calls = 0;
   return {
@@ -107,7 +106,7 @@ function fakeGateway({ fails }) {
   };
 }
 
-test("R2 F3: after her agent fails, she answers herself for a minute (no planner, no agent call); the error shows no key", async () => {
+test("after her agent fails, she answers herself for a minute (no planner, no agent call); the error shows no key", async () => {
   let plans = 0;
   const gateway = fakeGateway({ fails: true });
   const r = await chatRig({ askLLM: async () => "her own voice", plan: async () => (plans++, '{"agent": true}'), gateway });
@@ -128,7 +127,7 @@ test("R2 F3: after her agent fails, she answers herself for a minute (no planner
   }
 });
 
-test("R2 F3: messages routed to her agent are limited to 10 a minute per account", async () => {
+test("messages routed to her agent are limited to 10 a minute per account", async () => {
   let plans = 0;
   const gateway = fakeGateway({ fails: false });
   const r = await chatRig({ askLLM: async () => "her own voice", plan: async () => (plans++, '{"agent": true}'), gateway });
@@ -144,7 +143,7 @@ test("R2 F3: messages routed to her agent are limited to 10 a minute per account
   }
 });
 
-test("R2 F3: makeRateLimiter counts per key within the window", () => {
+test("makeRateLimiter counts per key within the window", () => {
   const take = makeRateLimiter(2, 60_000);
   assert.equal(take("a"), true);
   assert.equal(take("a"), true);
@@ -152,8 +151,7 @@ test("R2 F3: makeRateLimiter counts per key within the window", () => {
   assert.equal(take("b"), true);
 });
 
-// ── R2 F5 ──
-test("R2 F5: concurrent guests on a Mind with food for ONE thought: exactly one is answered", async () => {
+test("concurrent guests on a Mind with food for ONE thought: exactly one is answered", async () => {
   const r = await chatRig({ view: chatView({ food: 1n, latency: 30 }), askLLM: async () => (await sleep(100), "a real reply") });
   try {
     const codes = await quiet(() => Promise.all(Array.from({ length: 5 }, (_, i) => r.chat(`sybil${i}.testnet`, "hi")).map((p) => p.then((x) => x[0]))));
@@ -167,7 +165,7 @@ test("R2 F5: concurrent guests on a Mind with food for ONE thought: exactly one 
   }
 });
 
-test("R2 F5: a refused message releases its reservation", async () => {
+test("a refused message releases its reservation", async () => {
   const r = await chatRig({ view: chatView({ food: 1n }), askLLM: async () => "" }); // model gives nothing: 503
   try {
     assert.equal((await quiet(() => r.chat("g1.testnet")))[0], 503);
@@ -177,8 +175,7 @@ test("R2 F5: a refused message releases its reservation", async () => {
   }
 });
 
-// ── R2 F9 ──
-test("R2 F9: /allowance keeps live_state, live_balance and chat_credits_of a few seconds; a chat message reads them fresh", async () => {
+test("/allowance keeps live_state, live_balance and chat_credits_of a few seconds; a chat message reads them fresh", async () => {
   const counts = {};
   const r = await chatRig({ view: chatView({ counts }), askLLM: async () => "hi" });
   try {
@@ -231,8 +228,7 @@ function gwRig({ jobs, food = 10n, state = "content", deliver = async () => ({})
 }
 const far = () => String((BigInt(Date.now()) + 3_600_000n) * 1_000_000n);
 
-// ── R2 F6 ──
-test("R2 F6: a stored result is hidden until the job is Delivered on chain (onJob and x402 resultOf)", async () => {
+test("a stored result is hidden until the job is Delivered on chain (onJob and x402 resultOf)", async () => {
   const agent = await agentServer();
   try {
     const job = { id: 42, mind_id: 3, service_id: 9, buyer: "buyer.testnet", input: "analyse", deadline: far(), status: "Open" };
@@ -257,7 +253,7 @@ test("R2 F6: a stored result is hidden until the job is Delivered on chain (onJo
   }
 });
 
-test("R2 F6: after a successful delivery the result is marked delivered", async () => {
+test("after a successful delivery the result is marked delivered", async () => {
   const agent = await agentServer();
   try {
     const job = { id: 7, mind_id: 3, service_id: 9, buyer: "buyer.testnet", input: "go", deadline: far(), status: "Open" };
@@ -274,8 +270,7 @@ test("R2 F6: after a successful delivery the result is marked delivered", async 
   }
 });
 
-// ── R2 F2 / F7 ──
-test("R2 F2: the gateway reads every page of its open jobs (50 parked jobs can't hide the rest)", async () => {
+test("the gateway reads every page of its open jobs (50 parked jobs can't hide the rest)", async () => {
   const agent = await agentServer();
   try {
     const jobs = [];
@@ -296,7 +291,7 @@ test("R2 F2: the gateway reads every page of its open jobs (50 parked jobs can't
   }
 });
 
-test("R2 F7: a Mind asleep or too hungry for the thought: her agent is not run and no attempt is spent", async () => {
+test("a Mind asleep or too hungry for the thought: her agent is not run and no attempt is spent", async () => {
   const agent = await agentServer();
   try {
     for (const [state, food] of [["asleep", 10n], ["hungry", 0n]]) {
@@ -320,7 +315,7 @@ test("R2 F7: a Mind asleep or too hungry for the thought: her agent is not run a
   }
 });
 
-test("R2 F7: food for one thought: only one of her jobs runs at a time", async () => {
+test("food for one thought: only one of her jobs runs at a time", async () => {
   const agent = await agentServer();
   try {
     const jobs = [1, 2, 3].map((id) => ({ id, mind_id: 3, service_id: 9, buyer: "b.testnet", input: "go", deadline: far(), status: "Open" }));
@@ -336,15 +331,14 @@ test("R2 F7: food for one thought: only one of her jobs runs at a time", async (
   }
 });
 
-// ── R2 F4 ──
-test("R2 F4: URLs in errors lose their credentials, query and fragment; the API key is masked", () => {
+test("URLs in errors lose their credentials, query and fragment; the API key is masked", () => {
   assert.equal(scrubUrls("can't reach an MCP server at http://127.0.0.1:1/mcp?token=MCPSECRET456 (fetch failed)"), "can't reach an MCP server at http://127.0.0.1:1 (fetch failed)");
   assert.equal(scrubUrls("GET https://u:pw@a.example.com/x#k=1 failed"), "GET https://a.example.com failed");
   assert.equal(scrubUrls("bad key sk-live-123456 rejected", ["sk-live-123456"]), "bad key *** rejected");
   assert.equal(scrubUrls("no url here"), "no url here");
 });
 
-test("R2 F4: a key in the agent URL never reaches /status last_error or the chat error", async () => {
+test("a key in the agent URL never reaches /status last_error or the chat error", async () => {
   const store = new Store(tmp(), "c.testnet", "s".repeat(64));
   store.setConn(7, { kind: "a2a", url: "http://127.0.0.1:1/?api_key=SUPERSECRET123", name: "x", skills: [], connectedBy: "o.testnet" }, "");
   store.setConn(8, { kind: "mcp", url: "http://127.0.0.1:1/mcp?token=MCPSECRET456", name: "y", skills: [], connectedBy: "o.testnet" }, "APIKEY-789");
@@ -367,8 +361,8 @@ test("R2 F4: a key in the agent URL never reaches /status last_error or the chat
   assert.doesNotMatch(JSON.stringify(store.conn(7)) + JSON.stringify(store.conn(8)), /"lastError":"[^"]*(SUPERSECRET123|MCPSECRET456)/, "nor what is stored");
 });
 
-// ── x402 (M-1, L-1..L-3) ──
-test("R2 M-1: number literals serde (no float_roundtrip) would refuse are caught as written", () => {
+// ── x402 ──
+test("number literals serde (no float_roundtrip) would refuse are caught as written", () => {
   for (const lit of ["1.7976931348623158e308", "1.79769313486231571e308", "17976931348623158" + "0".repeat(292), "-1.8e308", "1e309", "1" + "0".repeat(308), "0.1e310"])
     assert.equal(numberTooBig(lit), true, lit.slice(0, 40));
   for (const lit of ["1.7976931348623157e308", "1.79769313486231570e308", "-1.7976931348623157e308", "1e308", "9".repeat(308), "0", "0.0e999", "1e-400", "123.456"])
@@ -452,7 +446,7 @@ function x402Rig({ schema = null, views = {}, logs = ["job_order_refused buyer=b
 }
 const FORM = JSON.stringify({ type: "object", properties: { account: { type: "string" } }, required: ["account"] });
 
-test("R2 M-1: her owner or her agent ordering her services is refused before the relay", async () => {
+test("her owner or her agent ordering her services is refused before the relay", async () => {
   const r = x402Rig();
   const own = await r.send("hi", { sender: "keeper.testnet" });
   assert.equal(own.code, 402);
@@ -463,7 +457,7 @@ test("R2 M-1: her owner or her agent ordering her services is refused before the
   assert.equal(r.relayed(), 0);
 });
 
-test("R2 M-1: required fields only count on a plain object, as own properties", async () => {
+test("required fields only count on a plain object, as own properties", async () => {
   const r = x402Rig({ schema: JSON.stringify({ type: "object", required: ["constructor"] }) });
   for (const input of ["{}", '[{"constructor":"x"}]', '"constructor"', "null"]) {
     const out = await r.send(input);
@@ -475,7 +469,7 @@ test("R2 M-1: required fields only count on a plain object, as own properties", 
   assert.equal(r.relayed() + r2.relayed(), 0);
 });
 
-test("R2 M-1: her queue, the contract's queue and the buyer's open jobs on her are checked before the relay", async () => {
+test("her queue, the contract's queue and the buyer's open jobs on her are checked before the relay", async () => {
   const full = await x402Rig({ views: { open_count_of: 20 } }).send("hi");
   assert.equal(full.code, 409);
   assert.match(full.body.error.message, /20 jobs waiting/);
@@ -491,7 +485,7 @@ test("R2 M-1: her queue, the contract's queue and the buyer's open jobs on her a
   assert.equal(ok.code, 200, "open jobs on other Minds, or closed ones here, don't count");
 });
 
-test("R2 L-2: a view that fails is a 503 'try again', never a relay on a guess", async () => {
+test("a view that fails is a 503 'try again', never a relay on a guess", async () => {
   const boom = () => {
     throw new Error("RPC 502");
   };
@@ -508,7 +502,7 @@ test("R2 L-2: a view that fails is a 503 'try again', never a relay on a guess",
   assert.equal(schemaDown.code, 503, "a failed schema read is not 'no form'");
 });
 
-test("R2 L-3: a refusal about her state is not held against the buyer; one about their payment is", async () => {
+test("a refusal about her state is not held against the buyer; one about their payment is", async () => {
   const asleep = x402Rig({ logs: ["job_order_refused buyer=buyer.testnet reason=she is asleep: feed her to wake her (anyone can)"] });
   assert.equal((await asleep.send("hi")).code, 402);
   assert.equal((await asleep.send("hi again")).code, 402, "no 10-minute block");
@@ -524,7 +518,7 @@ test("R2 L-3: a refusal about her state is not held against the buyer; one about
   assert.equal(own.relayed(), 1);
 });
 
-test("R2 L-1: the same signed payment sent again after its relay is a 409 'already relayed', not a 402", async () => {
+test("the same signed payment sent again after its relay is a 409 'already relayed', not a 402", async () => {
   const r = x402Rig({ logs: ["job_order_refused buyer=buyer.testnet reason=she is asleep: feed her to wake her (anyone can)"] });
   const first = await r.send("hi");
   assert.equal(first.code, 402);
@@ -534,7 +528,7 @@ test("R2 L-1: the same signed payment sent again after its relay is a 409 'alrea
   assert.equal(r.relayed(), 1);
 });
 
-test("R2 L-1: a hanging chain read ends in a 503 within the per-read deadline, never relayed", async () => {
+test("a hanging chain read ends in a 503 within the per-read deadline, never relayed", async () => {
   const r = x402Rig({ views: { open_job_count: () => new Promise(() => {}) } });
   const t = Date.now();
   const out = await r.send("hi");
@@ -543,7 +537,7 @@ test("R2 L-1: a hanging chain read ends in a 503 within the per-read deadline, n
   assert.equal(r.relayed(), 0);
 });
 
-test("R2 F6: x402 GetTask shows the full result only for a Delivered job", async () => {
+test("x402 GetTask shows the full result only for a Delivered job", async () => {
   const results = { 5: { text: "FULL RESULT", files: [] } };
   const gateway = { resultOf: (id, status) => (status === "Delivered" ? results[id] : null), questionOf: () => null };
   let job = { id: 5, mind_id: 1, status: "Open", result: null, deadline: "1" };

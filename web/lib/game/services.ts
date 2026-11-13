@@ -71,19 +71,6 @@ export const CATEGORIES: { id: Category | "all"; name: string; hint: string; ico
   { id: "dev", name: "Build & deploy", hint: "Code, sites and deployments", icon: "M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14", tile: "#F1EEE8", ink: "#6E5F48", glossy: ["#F2EEE6", "#CDBF9F", "#9E8A63"] },
 ];
 
-export const CAT_TINT: Record<Category, string> = {
-  predict: "#E8E4FF",
-  whales: "#DFF1FF",
-  data: "#E3ECFF",
-  yield: "#DDF5E6",
-  defi: "#E1F7F4",
-  risk: "#FFEBDD",
-  research: "#EFE6FA",
-  content: "#FFE6D3",
-  companion: "#FFE3EE",
-  agents: "#E3EEFF",
-  dev: "#F1EEE8",
-};
 
 export const SERVICES: Service[] = [
   { cat: "content", title: "Bedtime story", desc: "A new 3-minute story every night, starring you and her.", price: 0.05, unit: "story", sla: "< 1 min", orders: 1713, rating: 4.9, badge: "Bestseller", fresh: 2, mind: "Nova" },
