@@ -160,7 +160,7 @@ export default function Header({
             )}
           </button>
           {open && (
-            <div className="hm-notif" style={{ zIndex: 60, background: "var(--surface)", borderRadius: 22, boxShadow: "0 24px 60px rgba(120,50,90,.22)", border: "1px solid var(--line)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div className="hm-notif" style={{ zIndex: 60, background: "var(--panel, var(--surface))", borderRadius: 22, boxShadow: "var(--panel-shadow, 0 24px 60px rgba(120,50,90,.22))", border: "1px solid var(--line)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
                 <span style={{ fontWeight: 600, fontSize: 16 }}>Notifications</span>
                 <button className="btn-link" onClick={g.markRead}>

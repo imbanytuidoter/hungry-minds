@@ -16,6 +16,9 @@ html[data-theme="seed"] .hm {
   --bg: radial-gradient(120% 90% at 50% 38%, var(--v2) 0%, var(--v1) 52%, var(--v0) 100%);
   --surface: rgba(var(--ink-rgb), 0.04);
   --surface-soft: rgba(var(--ink-rgb), 0.06);
+  /* dialogs and popovers float over the page, so they need a solid ground */
+  --panel: var(--v2);
+  --panel-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
   --ink: var(--cream);
   --ink-strong: color-mix(in srgb, var(--cream) 85%, #fff);
   --on-ink: var(--v1);
@@ -154,8 +157,7 @@ html[data-theme="seed"] .scene-seed { display: block; }
 html[data-theme="seed"] .hm .hm-logo-word { color: var(--cream) !important; font-family: var(--font-fraunces), Georgia, serif !important; font-weight: 500 !important; letter-spacing: -0.01em !important; }
 html[data-theme="seed"] .hm .hm-veil { background: rgba(var(--v1-rgb), 0.55) !important; }
 html[data-theme="seed"] .hm .hm-band { background: radial-gradient(120% 140% at 0% 50%, rgba(var(--light-rgb), 0.16), transparent 60%), rgba(var(--ink-rgb), 0.03) !important; border: 1px solid var(--line); border-radius: 14px !important; }
-html[data-theme="seed"] .hm .hm-wx-pic { background: radial-gradient(80% 90% at 50% 70%, rgba(var(--light-rgb), 0.3), transparent 70%), var(--v1) !important; border-color: var(--line) !important; }
-html[data-theme="seed"] .hm .hm-wx-pic > div { display: none; }
+html[data-theme="seed"] .hm .hm-wx-pic { display: none; }
 
 /* category marks: thread-drawn icons in a hairline ring instead of glossy coloured balls */
 html[data-theme="seed"] .hm .hm-bob { animation: none !important; }

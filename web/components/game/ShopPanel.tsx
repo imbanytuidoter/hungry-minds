@@ -41,7 +41,7 @@ export default function ShopPanel({ cat, setCat, order, visit, initialMode = "ma
           <span style={{ fontWeight: 600, fontSize: 24, letterSpacing: "-.02em" }}>Shop</span>
           <span className="sub">{g.mode === "live" ? "Your payment waits in the contract until the job is done, or comes back" : "Every order is a paid chat with the Mind who does the work"}</span>
         </div>
-        <div style={{ display: "flex", gap: 4, padding: 4, borderRadius: 999, background: "color-mix(in srgb, var(--surface) 60%, transparent)" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, padding: 4, borderRadius: 22, background: "color-mix(in srgb, var(--surface) 60%, transparent)" }}>
           {(
             [
               ["market", "Marketplace"],
@@ -50,7 +50,7 @@ export default function ShopPanel({ cat, setCat, order, visit, initialMode = "ma
               ["earn", "Developer panel"],
             ] as const
           ).filter(([id]) => id !== "orders" || g.mode === "live").map(([id, n]) => (
-            <button key={id} onClick={() => setMode(id)} style={{ padding: "8px 16px", borderRadius: 999, border: "none", background: mode === id ? "var(--ink)" : "transparent", color: mode === id ? "var(--on-ink)" : "var(--ink)", fontWeight: 600, fontSize: 13.5 }}>
+            <button key={id} onClick={() => setMode(id)} style={{ padding: "8px 16px", borderRadius: 999, border: "none", whiteSpace: "nowrap", background: mode === id ? "var(--ink)" : "transparent", color: mode === id ? "var(--on-ink)" : "var(--ink)", fontWeight: 600, fontSize: 13.5 }}>
               {n}
             </button>
           ))}

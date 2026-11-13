@@ -86,17 +86,22 @@ export function GetAMind({ onHatch, onBuy, compact = false }: { onHatch: () => v
         </span>
       </button>
       <button className="hm-getmind-opt" onClick={onBuy}>
-        <span className="hm-getmind-pic hm-getmind-stack" aria-hidden>
-          {preview.length ? (
-            preview.map(({ m }) => (
+        {preview.length ? (
+          <span className="hm-getmind-pic hm-getmind-stack" aria-hidden>
+            {preview.map(({ m }) => (
               <span key={m.id}>
                 <GlossyMind tone={m.look.tone} mood={moodOf(stateOf(m))} eyes={m.look.eyes} hat={m.look.hat} outfit={m.look.outfit} />
               </span>
-            ))
-          ) : (
-            <span className="hm-getmind-tag">NFT</span>
-          )}
-        </span>
+            ))}
+          </span>
+        ) : (
+          <span className="hm-getmind-pic" aria-hidden>
+            <svg className="hm-getmind-tag" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12.2V4.5A1.5 1.5 0 0 1 4.5 3h7.7a1.5 1.5 0 0 1 1.06.44l7.3 7.3a1.5 1.5 0 0 1 0 2.12l-7.7 7.7a1.5 1.5 0 0 1-2.12 0l-7.3-7.3A1.5 1.5 0 0 1 3 12.2Z" />
+              <circle cx="8" cy="8" r="1.4" />
+            </svg>
+          </span>
+        )}
         <span className="hm-getmind-txt">
           <b>Buy a grown Mind</b>
           <span>

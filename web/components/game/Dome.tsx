@@ -94,7 +94,7 @@ export default function Dome({
   const ownEyes = (mind?.look.eyes ?? 0) > 0;
 
   return (
-    <main ref={ref} className="hm-dome">
+    <main ref={ref} className="hm-dome" data-guest={guest || undefined}>
       <div className="hm-dome-plants" style={{ position: "absolute", inset: 0, filter: "blur(7px)", opacity: 0.75, pointerEvents: "none" }}>
         {PLANTS.map(([x, y, w, r, t, dur], i) => (
           <div key={i} style={{ position: "absolute", left: x, bottom: y, width: w, aspectRatio: "220/120", transform: `rotate(${r})`, transformOrigin: "0 50%" }}>
@@ -127,8 +127,8 @@ export default function Dome({
       </div>
 
       {guest && (
-        <div className="hm-veil" style={{ position: "absolute", inset: 0, zIndex: 8, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, background: "rgba(255,240,246,.55)", backdropFilter: "blur(6px)" }}>
-          <div style={{ maxWidth: 380, width: "100%", padding: 22, borderRadius: 26, background: "var(--surface)", boxShadow: "0 20px 50px rgba(180,90,140,.2)", display: "flex", flexDirection: "column", gap: 10, textAlign: "center", alignItems: "center" }}>
+        <div className="hm-veil" style={{ position: "absolute", inset: 0, zIndex: 8, display: "flex", overflowY: "auto", padding: 16, background: "rgba(255,240,246,.55)", backdropFilter: "blur(6px)" }}>
+          <div style={{ margin: "auto", maxWidth: 380, width: "100%", padding: 22, borderRadius: 26, background: "var(--panel, var(--surface))", boxShadow: "var(--panel-shadow, 0 20px 50px rgba(180,90,140,.2))", display: "flex", flexDirection: "column", gap: 10, textAlign: "center", alignItems: "center" }}>
             <Logo size={64} word={false} />
             <span style={{ fontWeight: 600, fontSize: 19, color: "var(--ink-strong)" }}>No Mind yet</span>
             <span style={{ fontSize: 13.5, lineHeight: 1.45, color: "var(--muted-2)" }}>Hatch a new one or buy one that is already grown. You can still visit and feed anyone else&apos;s Mind.</span>

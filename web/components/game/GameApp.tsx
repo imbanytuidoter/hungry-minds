@@ -147,7 +147,7 @@ export default function GameApp() {
         <div style={{ position: "absolute", top: 22, right: 22 }}>
           <NetworkSwitch />
         </div>
-        <div style={{ maxWidth: 520, padding: 28, borderRadius: 30, background: "color-mix(in srgb, var(--surface) 82%, transparent)", border: "1.5px solid #fff", boxShadow: "0 20px 50px rgba(180,90,140,.14)", display: "flex", flexDirection: "column", gap: 14, textAlign: "center", alignItems: "center" }}>
+        <div style={{ maxWidth: 520, padding: 28, borderRadius: 30, background: "var(--panel, color-mix(in srgb, var(--surface) 82%, transparent))", border: "1.5px solid var(--glass-line, #fff)", boxShadow: "0 20px 50px rgba(180,90,140,.14)", display: "flex", flexDirection: "column", gap: 14, textAlign: "center", alignItems: "center" }}>
           <Logo size={88} word={false} />
           <span style={{ fontWeight: 600, fontSize: 26, letterSpacing: "-.02em", color: "var(--ink-strong)" }}>Mainnet soon</span>
           <span style={{ fontSize: 15, lineHeight: 1.5, color: "var(--muted-2)" }}>
@@ -173,7 +173,7 @@ export default function GameApp() {
   // Every page load asks to sign in (live mode). Browsing without an account stays possible.
   const signPrompt = g.mode === "live" && !g.account && !browsing && (
     <div role="dialog" aria-modal="true" aria-label="Sign in" style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(60,30,50,.28)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div style={{ maxWidth: 460, width: "100%", padding: 28, borderRadius: 30, background: "color-mix(in srgb, var(--surface) 95%, transparent)", border: "1.5px solid #fff", boxShadow: "0 20px 50px rgba(180,90,140,.18)", display: "flex", flexDirection: "column", gap: 14, alignItems: "center", textAlign: "center" }}>
+      <div style={{ maxWidth: 460, width: "100%", padding: 28, borderRadius: 30, background: "var(--panel, color-mix(in srgb, var(--surface) 95%, transparent))", border: "1.5px solid var(--glass-line, #fff)", boxShadow: "var(--panel-shadow, 0 20px 50px rgba(180,90,140,.18))", display: "flex", flexDirection: "column", gap: 14, alignItems: "center", textAlign: "center" }}>
         <Logo size={88} word={false} />
         <span style={{ fontWeight: 600, fontSize: 24, letterSpacing: "-.02em", color: "var(--ink-strong)" }}>Sign in to play</span>
         <span style={{ fontSize: 14.5, lineHeight: 1.5, color: "var(--muted-2)" }}>Your Minds, food and earnings live on NEAR {NETWORK} under your account. Connect {WALLET_KIND} to continue.</span>
